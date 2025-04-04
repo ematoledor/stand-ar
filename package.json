@@ -1,0 +1,16 @@
+{
+  "name": "stand-ar",
+  "version": "1.0.0",
+  "description": "Simple AR app to display 3D model with QR code scanning",
+  "main": "index.js",
+  "scripts": {
+    "start": "serve public",
+    "dev": "serve public"
+  },
+  "dependencies": {
+    "serve": "^14.2.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+} 
