@@ -46,12 +46,38 @@
             top: 20px;
             left: 50%;
             transform: translateX(-50%);
-            background-color: rgba(0, 0, 0, 0.5);
+            background-color: rgba(0, 0, 0, 0.7);
             color: white;
             padding: 8px 15px;
             border-radius: 20px;
             font-size: 14px;
             z-index: 10;
+            max-width: 80%;
+            text-align: center;
+        }
+        .debug-panel {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 10px;
+            font-size: 12px;
+            z-index: 100;
+            max-height: 30%;
+            overflow-y: auto;
+        }
+        .debug-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .error-log {
+            color: #ff5555;
+        }
+        .info-log {
+            color: #55ff55;
         }
     </style>
 </head>
@@ -65,6 +91,12 @@
 
     <!-- AR Status -->
     <div id="statusMessage" class="status-message hidden">Buscando superficies...</div>
+
+    <!-- Debug Panel -->
+    <div id="debugPanel" class="debug-panel hidden">
+        <div class="debug-title">Diagnostico AR:</div>
+        <div id="debugLog"></div>
+    </div>
 
     <!-- AR Scene -->
     <a-scene 
@@ -98,23 +130,75 @@
             const arScene = document.getElementById('arScene');
             const statusMessage = document.getElementById('statusMessage');
             const standModel = document.getElementById('stand-model');
+            const debugPanel = document.getElementById('debugPanel');
+            const debugLog = document.getElementById('debugLog');
             
             // State
             let xrSession = null;
+            let hitTestStartTime = 0;
+            let lastHitTestTime = 0;
+            let hitTestCount = 0;
+            let frameCount = 0;
+            
+            // Debug logging
+            function logDebug(message, isError = false) {
+                const now = new Date();
+                const timestamp = now.toLocaleTimeString();
+                const logClass = isError ? 'error-log' : 'info-log';
+                
+                debugLog.innerHTML += `<div class="${logClass}">[${timestamp}] ${message}</div>`;
+                debugPanel.scrollTop = debugPanel.scrollHeight;
+                
+                if (isError) {
+                    console.error(message);
+                } else {
+                    console.log(message);
+                }
+            }
+            
+            // Check device info
+            function getDeviceInfo() {
+                const ua = navigator.userAgent;
+                const browserInfo = ua.match(/(chrome|firefox|safari|edge|opera)\/?\s*(\.?\d+(\.\d+)*)/i);
+                const browser = browserInfo ? browserInfo[1] : "unknown";
+                const browserVersion = browserInfo ? browserInfo[2] : "unknown";
+                
+                const deviceInfo = {
+                    userAgent: ua,
+                    browser: browser,
+                    browserVersion: browserVersion,
+                    mobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua),
+                    ios: /iPad|iPhone|iPod/.test(ua),
+                    android: /Android/.test(ua),
+                    webXRSupported: !!navigator.xr
+                };
+                
+                return deviceInfo;
+            }
             
             // Start AR experience
             function startAR() {
                 startScreen.classList.add('hidden');
                 arScene.style.display = 'block';
                 statusMessage.classList.remove('hidden');
+                debugPanel.classList.remove('hidden');
+                
+                const deviceInfo = getDeviceInfo();
+                logDebug(`Dispositivo: ${deviceInfo.mobile ? 'Móvil' : 'Desktop'} - ${deviceInfo.browser} ${deviceInfo.browserVersion}`);
+                logDebug(`Sistema: ${deviceInfo.ios ? 'iOS' : deviceInfo.android ? 'Android' : 'Otro'}`);
                 
                 if (navigator.xr) {
+                    logDebug("WebXR API disponible");
+                    
                     navigator.xr.isSessionSupported('immersive-ar')
                         .then(supported => {
                             if (!supported) {
-                                showFallbackModel('AR no soportado');
+                                logDebug("AR no soportado en este dispositivo", true);
+                                showFallbackModel('AR no soportado en este dispositivo');
                                 return;
                             }
+                            
+                            logDebug("AR soportado, solicitando sesión");
                             
                             const sessionInit = {
                                 requiredFeatures: ['hit-test'],
@@ -125,107 +209,206 @@
                             navigator.xr.requestSession('immersive-ar', sessionInit)
                                 .then(session => {
                                     xrSession = session;
+                                    logDebug("Sesión AR iniciada correctamente");
                                     
                                     // Handle session end
                                     session.addEventListener('end', onSessionEnd);
                                     
                                     // Use A-Frame's built-in WebXR integration
-                                    arScene.renderer.xr.setReferenceSpaceType('local');
-                                    arScene.renderer.xr.setSession(session);
+                                    try {
+                                        arScene.renderer.xr.setReferenceSpaceType('local');
+                                        arScene.renderer.xr.setSession(session);
+                                        logDebug("A-Frame XR configurado");
+                                    } catch (err) {
+                                        logDebug(`Error al configurar A-Frame XR: ${err.message}`, true);
+                                        showFallbackModel('Error de inicialización');
+                                        return;
+                                    }
                                     
                                     session.requestReferenceSpace('local')
                                         .then(refSpace => {
+                                            logDebug("Reference space obtenido: local");
+                                            
                                             session.requestHitTestSource({ space: refSpace })
                                                 .then(hitTestSource => {
+                                                    logDebug("Hit test source creado correctamente");
+                                                    hitTestStartTime = performance.now();
                                                     setupHitTesting(session, hitTestSource, refSpace);
                                                 })
                                                 .catch(error => {
-                                                    console.error('Hit test source error:', error);
-                                                    showFallbackModel('Error detectando superficies');
+                                                    logDebug(`Error al solicitar hit test source: ${error.message}`, true);
+                                                    showFallbackModel('Error al detectar superficies');
                                                 });
                                         })
                                         .catch(error => {
-                                            console.error('Reference space error:', error);
-                                            showFallbackModel('Error en configuración AR');
+                                            logDebug(`Error al solicitar reference space: ${error.message}`, true);
+                                            showFallbackModel('Error configuración AR');
                                         });
                                 })
                                 .catch(error => {
-                                    console.error('Session request error:', error);
-                                    showFallbackModel('Error iniciando AR');
+                                    logDebug(`Error al solicitar sesión AR: ${error.message}`, true);
+                                    showFallbackModel('Error al iniciar AR');
                                 });
+                        })
+                        .catch(error => {
+                            logDebug(`Error al verificar soporte AR: ${error.message}`, true);
+                            showFallbackModel('Error verificando soporte AR');
                         });
                 } else {
+                    logDebug("WebXR API no disponible en este navegador", true);
                     showFallbackModel('WebXR no disponible');
                 }
             }
             
             // Handle session end
             function onSessionEnd() {
+                logDebug("Sesión AR finalizada");
                 xrSession = null;
                 startScreen.classList.remove('hidden');
                 arScene.style.display = 'none';
                 statusMessage.classList.add('hidden');
+                debugPanel.classList.add('hidden');
                 standModel.setAttribute('visible', false);
             }
             
             // Set up hit testing
             function setupHitTesting(session, hitTestSource, refSpace) {
                 let modelPlaced = false;
+                let noHitCount = 0;
+                let maxNoHitBeforeWarning = 90; // About 1.5 seconds
                 
                 function onFrame(time, frame) {
-                    if (!session || modelPlaced) {
-                        if (!modelPlaced) {
-                            session.requestAnimationFrame(onFrame);
-                        }
+                    frameCount++;
+                    
+                    if (!session) {
+                        logDebug("Sesión no disponible en frame", true);
+                        return;
+                    }
+                    
+                    if (modelPlaced) {
                         return;
                     }
                     
                     session.requestAnimationFrame(onFrame);
                     
-                    const hitTestResults = frame.getHitTestResults(hitTestSource);
-                    if (hitTestResults.length > 0) {
-                        statusMessage.textContent = 'Superficie detectada - Toca para colocar';
+                    // Every 30 frames log basic diagnostics
+                    if (frameCount % 30 === 0) {
+                        const elapsedTime = Math.floor((performance.now() - hitTestStartTime) / 1000);
+                        logDebug(`Búsqueda de superficies: ${elapsedTime}s, Hits: ${hitTestCount}`);
+                    }
+                    
+                    try {
+                        const hitTestResults = frame.getHitTestResults(hitTestSource);
                         
-                        // Add tap listener if not already added
-                        if (!modelPlaced) {
-                            session.addEventListener('select', () => {
-                                const hit = frame.getHitTestResults(hitTestSource)[0];
-                                if (hit) {
-                                    const pose = hit.getPose(refSpace);
-                                    if (pose) {
-                                        // Position model at hit point
-                                        const {x, y, z} = pose.transform.position;
-                                        standModel.setAttribute('position', `${x} ${y} ${z}`);
-                                        standModel.setAttribute('visible', true);
-                                        
-                                        // Update UI
-                                        statusMessage.textContent = 'Toca el modelo para Instagram';
-                                        modelPlaced = true;
-                                        
-                                        // Add model click listener
-                                        standModel.addEventListener('click', openInstagram);
-                                    }
+                        if (hitTestResults.length > 0) {
+                            lastHitTestTime = performance.now();
+                            hitTestCount++;
+                            noHitCount = 0;
+                            
+                            if (hitTestCount === 1) {
+                                logDebug("Primera superficie detectada!");
+                            }
+                            
+                            if (hitTestCount % 30 === 0) {
+                                const pose = hitTestResults[0].getPose(refSpace);
+                                if (pose) {
+                                    const {x, y, z} = pose.transform.position;
+                                    logDebug(`Posición superficie: x=${x.toFixed(2)}, y=${y.toFixed(2)}, z=${z.toFixed(2)}`);
                                 }
-                            }, {once: true});
+                            }
+                            
+                            statusMessage.textContent = 'Superficie detectada - Toca para colocar';
+                            
+                            // Add tap listener if not already added
+                            if (!modelPlaced) {
+                                session.addEventListener('select', () => {
+                                    logDebug("Evento select recibido, colocando modelo");
+                                    
+                                    const hit = frame.getHitTestResults(hitTestSource)[0];
+                                    if (hit) {
+                                        const pose = hit.getPose(refSpace);
+                                        if (pose) {
+                                            // Position model at hit point
+                                            const {x, y, z} = pose.transform.position;
+                                            logDebug(`Colocando modelo en: x=${x.toFixed(2)}, y=${y.toFixed(2)}, z=${z.toFixed(2)}`);
+                                            
+                                            standModel.setAttribute('position', `${x} ${y} ${z}`);
+                                            standModel.setAttribute('visible', true);
+                                            
+                                            // Update UI
+                                            statusMessage.textContent = 'Toca el modelo para Instagram';
+                                            modelPlaced = true;
+                                            
+                                            // Add model click listener
+                                            standModel.addEventListener('click', openInstagram);
+                                            logDebug("Modelo colocado correctamente");
+                                        } else {
+                                            logDebug("No se pudo obtener pose válida", true);
+                                        }
+                                    } else {
+                                        logDebug("No se encontró hit test result en evento select", true);
+                                    }
+                                }, {once: true});
+                            }
+                        } else {
+                            noHitCount++;
+                            
+                            // If we haven't found surfaces for a while, provide more feedback
+                            if (noHitCount === maxNoHitBeforeWarning) {
+                                logDebug("No se están detectando superficies. Intenta:", true);
+                                logDebug("1. Mueve el dispositivo lentamente", true);
+                                logDebug("2. Asegúrate de tener buena iluminación", true);
+                                logDebug("3. Apunta a superficies planas como pisos o mesas", true);
+                                
+                                statusMessage.textContent = 'Mueve lentamente para detectar superficies';
+                            }
+                            
+                            if (frameCount > 300 && hitTestCount === 0) {
+                                // After 5 seconds with no hits, show a more detailed message
+                                statusMessage.textContent = 'Dificultad detectando superficies. Mueve lentamente.';
+                            }
                         }
+                    } catch (err) {
+                        logDebug(`Error en frame AR: ${err.message}`, true);
                     }
                 }
                 
-                session.requestAnimationFrame(onFrame);
+                try {
+                    session.requestAnimationFrame(onFrame);
+                } catch (err) {
+                    logDebug(`Error al iniciar animation frame: ${err.message}`, true);
+                    showFallbackModel('Error en loop de renderizado');
+                }
             }
             
             // Show model in fallback mode
             function showFallbackModel(message) {
                 statusMessage.textContent = message;
+                logDebug(`Activando modo fallback: ${message}`, true);
                 standModel.setAttribute('position', '0 0 -3');
                 standModel.setAttribute('visible', true);
                 standModel.addEventListener('click', openInstagram);
+                
+                // After 3 seconds, hide the error message
+                setTimeout(() => {
+                    statusMessage.textContent = 'Toca el modelo para visitar Instagram';
+                }, 3000);
             }
             
             // Open Instagram
             function openInstagram() {
+                logDebug("Abriendo Instagram");
                 window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
             }
+            
+            // Check if model loaded successfully
+            standModel.addEventListener('model-loaded', () => {
+                logDebug("Modelo 3D cargado correctamente");
+            });
+            
+            standModel.addEventListener('model-error', (e) => {
+                logDebug(`Error al cargar modelo 3D: ${e.detail.message || 'Error desconocido'}`, true);
+            });
             
             // Set up event listeners
             startButton.addEventListener('click', startAR);
@@ -233,6 +416,32 @@
                 e.preventDefault();
                 startAR();
             });
+            
+            // Add a manual fallback button
+            setTimeout(() => {
+                const manualFallbackBtn = document.createElement('button');
+                manualFallbackBtn.className = 'button';
+                manualFallbackBtn.style.position = 'fixed';
+                manualFallbackBtn.style.bottom = '10px';
+                manualFallbackBtn.style.right = '10px';
+                manualFallbackBtn.style.zIndex = '1000';
+                manualFallbackBtn.style.display = 'none';
+                manualFallbackBtn.textContent = 'Mostrar Modelo';
+                
+                manualFallbackBtn.addEventListener('click', () => {
+                    showFallbackModel('Modelo mostrado manualmente');
+                });
+                
+                document.body.appendChild(manualFallbackBtn);
+                
+                // Show fallback button after 10 seconds if still searching for surfaces
+                setTimeout(() => {
+                    if (hitTestCount === 0 && !standModel.getAttribute('visible')) {
+                        manualFallbackBtn.style.display = 'block';
+                        logDebug("Mostrando botón de fallback debido a tiempo excedido", true);
+                    }
+                }, 10000);
+            }, 1000);
         });
     </script>
 </body>
