@@ -7,6 +7,7 @@
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
     <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
     <script src="https://raw.githack.com/donmccurdy/aframe-extras/master/dist/aframe-extras.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.143.0/examples/js/loaders/GLTFLoader.js"></script>
     <style>
         body {
             margin: 0;
@@ -168,6 +169,19 @@
             text-align: center;
             line-height: 1.5;
         }
+        #webxr-notice {
+            display: none;
+            position: fixed;
+            top: 20px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            color: white;
+            font-size: 16px;
+            z-index: 10;
+            background-color: rgba(33, 150, 243, 0.7);
+            padding: 10px;
+        }
     </style>
 </head>
 <body>
@@ -177,6 +191,9 @@
         <p class="instructions">Esta experiencia AR te permite ver un modelo 3D del stand de Coparmex CDMX. Apunta al suelo para colocarlo y tócalo para registrarte.</p>
         <button id="startButton" class="button start-button">Iniciar Experiencia AR</button>
     </div>
+
+    <!-- Notices -->
+    <div id="webxr-notice">Usando WebXR para detección precisa de superficies</div>
 
     <!-- Floor detection UI -->
     <div id="crosshair" class="crosshair"></div>
@@ -228,12 +245,123 @@
     </a-scene>
 
     <script>
-        // Floor detection component
+        // WebXR AR Hit Test detection
+        class WebXRHitTest {
+            constructor() {
+                this.xrSession = null;
+                this.gl = null;
+                this.hitTestSource = null;
+                this.viewerSpace = null;
+                this.refSpace = null;
+                this.hitTestActive = false;
+                this.isWebXRSupported = false;
+                this.hitDetectedCallback = null;
+                
+                // Check for WebXR support
+                if (navigator.xr) {
+                    navigator.xr.isSessionSupported('immersive-ar')
+                        .then((supported) => {
+                            this.isWebXRSupported = supported;
+                            if (supported) {
+                                console.log('WebXR AR is supported! Real floor detection available.');
+                                document.getElementById('webxr-notice').style.display = 'block';
+                            } else {
+                                console.log('WebXR AR is not supported. Falling back to basic AR.js.');
+                            }
+                        });
+                }
+            }
+            
+            init(renderer, hitDetectedCallback) {
+                if (!this.isWebXRSupported || !navigator.xr) return false;
+                
+                this.gl = renderer.getContext();
+                this.hitDetectedCallback = hitDetectedCallback;
+                
+                // Start a WebXR session
+                navigator.xr.requestSession('immersive-ar', {
+                    requiredFeatures: ['hit-test']
+                }).then((session) => {
+                    this.xrSession = session;
+                    this.onSessionStarted(session);
+                    return true;
+                }).catch(error => {
+                    console.error('Failed to start WebXR session:', error);
+                    return false;
+                });
+                
+                return false;
+            }
+            
+            onSessionStarted(session) {
+                session.addEventListener('end', this.onSessionEnded.bind(this));
+                
+                this.gl.makeXRCompatible().then(() => {
+                    session.requestReferenceSpace('local').then((refSpace) => {
+                        this.refSpace = refSpace;
+                        
+                        session.requestReferenceSpace('viewer').then((viewerSpace) => {
+                            this.viewerSpace = viewerSpace;
+                            
+                            session.requestHitTestSource({
+                                space: this.viewerSpace
+                            }).then((hitTestSource) => {
+                                this.hitTestSource = hitTestSource;
+                                this.hitTestActive = true;
+                            });
+                        });
+                    });
+                });
+                
+                session.updateRenderState({
+                    baseLayer: new XRWebGLLayer(session, this.gl)
+                });
+            }
+            
+            onSessionEnded() {
+                this.hitTestActive = false;
+                this.hitTestSource = null;
+                this.xrSession = null;
+            }
+            
+            checkHits(frame) {
+                if (!this.hitTestActive || !this.hitTestSource) return false;
+                
+                const hitTestResults = frame.getHitTestResults(this.hitTestSource);
+                
+                if (hitTestResults.length > 0) {
+                    const hit = hitTestResults[0];
+                    const pose = hit.getPose(this.refSpace);
+                    
+                    if (pose) {
+                        if (this.hitDetectedCallback) {
+                            this.hitDetectedCallback(true, {
+                                x: pose.transform.position.x,
+                                y: pose.transform.position.y,
+                                z: pose.transform.position.z
+                            });
+                        }
+                        return true;
+                    }
+                } else {
+                    if (this.hitDetectedCallback) {
+                        this.hitDetectedCallback(false, null);
+                    }
+                }
+                
+                return false;
+            }
+        }
+
+        // Floor detection component for AR.js
         AFRAME.registerComponent('floor-detector', {
             init: function() {
                 this.raycaster = new THREE.Raycaster();
                 this.isFloorDetected = false;
                 this.placedModel = false;
+                this.webXRHitTest = new WebXRHitTest();
+                this.usingWebXR = false;
+                this.lastHitPosition = null;
                 
                 this.camera = document.querySelector('a-entity[camera]');
                 this.floor = document.querySelector('#floor-plane');
@@ -243,51 +371,104 @@
                 this.tapIndicator = document.getElementById('tapIndicator');
                 this.footerText = document.querySelector('.footer-text');
                 
-                // Show crosshair
+                // Show UI elements
                 this.crosshair.style.display = 'block';
                 this.detectionRing.style.display = 'block';
                 this.detectionRing.classList.add('pulsate');
+                this.tapIndicator.style.display = 'block';
+                this.tapIndicator.textContent = 'Buscando superficie...';
+                
+                // Set initial UI state to not detected
+                this.detectionRing.classList.remove('floor-detected');
+                
+                // Try to initialize WebXR hit testing
+                const scene = document.querySelector('a-scene');
+                if (scene.renderer) {
+                    this.usingWebXR = this.webXRHitTest.init(scene.renderer, this.onHitTestResult.bind(this));
+                }
                 
                 // Listen for clicks
                 document.addEventListener('click', this.handleTap.bind(this));
                 document.addEventListener('touchend', this.handleTap.bind(this));
                 
-                // Set up continuous floor detection
-                this.detectFloorInterval = setInterval(this.detectFloor.bind(this), 100);
+                // Set up frame loop for hit testing
+                this.el.sceneEl.addEventListener('renderstart', () => {
+                    this.el.sceneEl.renderer.setAnimationLoop(this.tick.bind(this));
+                });
                 
-                // Start with no floor detected
-                this.detectionRing.classList.remove('floor-detected');
-                this.tapIndicator.textContent = 'Buscando superficie...';
-                
-                // Start floor detection cycle
-                this.floorDetectionCycle();
+                // Fallback to raycasting for devices without WebXR
+                if (!this.usingWebXR) {
+                    this.detectFloorInterval = setInterval(this.detectFloorFallback.bind(this), 100);
+                }
             },
             
-            floorDetectionCycle: function() {
+            onHitTestResult: function(detected, position) {
                 if (this.placedModel) return;
                 
-                // Simulate floor detection with alternating states
-                setTimeout(() => {
-                    if (this.placedModel) return;
-                    this.isFloorDetected = true;
-                    this.detectionRing.classList.add('floor-detected');
-                    this.tapIndicator.textContent = '¡Superficie detectada! Toca para colocar el modelo';
+                if (detected && position) {
+                    this.lastHitPosition = position;
                     
-                    setTimeout(() => {
-                        if (this.placedModel) return;
+                    // Update UI to show floor detected
+                    if (!this.isFloorDetected) {
+                        this.isFloorDetected = true;
+                        this.detectionRing.classList.add('floor-detected');
+                        this.tapIndicator.textContent = '¡Superficie detectada! Toca para colocar el modelo';
+                    }
+                } else {
+                    this.lastHitPosition = null;
+                    
+                    // Update UI to show floor not detected
+                    if (this.isFloorDetected) {
                         this.isFloorDetected = false;
                         this.detectionRing.classList.remove('floor-detected');
                         this.tapIndicator.textContent = 'Buscando superficie...';
-                        
-                        this.floorDetectionCycle();
-                    }, 2000 + Math.random() * 1000);
-                }, 1000 + Math.random() * 1000);
+                    }
+                }
             },
             
-            detectFloor: function() {
-                if (this.placedModel) {
+            detectFloorFallback: function() {
+                if (this.placedModel || this.usingWebXR) {
                     clearInterval(this.detectFloorInterval);
                     return;
+                }
+                
+                // Use raycasting for basic floor detection
+                const cameraPosition = this.camera.object3D.position;
+                const cameraDirection = new THREE.Vector3(0, 0, -1);
+                cameraDirection.applyQuaternion(this.camera.object3D.quaternion);
+                
+                this.raycaster.set(cameraPosition, cameraDirection);
+                const floorObject = this.floor.object3D;
+                const intersects = this.raycaster.intersectObject(floorObject, true);
+                
+                if (intersects.length > 0) {
+                    this.lastHitPosition = intersects[0].point;
+                    
+                    // Update UI to show floor detected
+                    if (!this.isFloorDetected) {
+                        this.isFloorDetected = true;
+                        this.detectionRing.classList.add('floor-detected');
+                        this.tapIndicator.textContent = '¡Superficie detectada! Toca para colocar el modelo';
+                    }
+                } else {
+                    this.lastHitPosition = null;
+                    
+                    // Update UI to show floor not detected
+                    if (this.isFloorDetected) {
+                        this.isFloorDetected = false;
+                        this.detectionRing.classList.remove('floor-detected');
+                        this.tapIndicator.textContent = 'Buscando superficie...';
+                    }
+                }
+            },
+            
+            tick: function(time, delta) {
+                // Process WebXR hit test results each frame
+                if (this.usingWebXR && this.webXRHitTest.xrSession) {
+                    const frame = this.webXRHitTest.xrSession.requestAnimationFrame(() => {});
+                    if (frame) {
+                        this.webXRHitTest.checkHits(frame);
+                    }
                 }
             },
             
@@ -305,28 +486,47 @@
                     return;
                 }
                 
+                // Only place model if floor is detected
+                if (!this.isFloorDetected) {
+                    console.log('No floor detected, cannot place model');
+                    return;
+                }
+                
                 // Hide UI elements
                 this.crosshair.style.display = 'none';
                 this.detectionRing.style.display = 'none';
                 this.tapIndicator.style.display = 'none';
                 this.footerText.style.display = 'block';
+                document.getElementById('webxr-notice').style.display = 'none';
                 
-                // Position the model in front of the camera
-                const cameraPosition = this.camera.object3D.position;
-                const cameraDirection = new THREE.Vector3(0, 0, -1);
-                cameraDirection.applyQuaternion(this.camera.object3D.quaternion);
-                cameraDirection.multiplyScalar(5); // Place 5 meters in front (changed from 3)
+                let modelPosition;
                 
-                const modelPosition = {
-                    x: cameraPosition.x + cameraDirection.x,
-                    y: 0, // Keep on floor
-                    z: cameraPosition.z + cameraDirection.z
-                };
+                // Use the hit test position if available
+                if (this.lastHitPosition) {
+                    modelPosition = {
+                        x: this.lastHitPosition.x,
+                        y: 0, // Keep on floor
+                        z: this.lastHitPosition.z
+                    };
+                } else {
+                    // Fallback: Place model in front of camera
+                    const cameraPosition = this.camera.object3D.position;
+                    const cameraDirection = new THREE.Vector3(0, 0, -1);
+                    cameraDirection.applyQuaternion(this.camera.object3D.quaternion);
+                    cameraDirection.multiplyScalar(5); // Place 5 meters in front
+                    
+                    modelPosition = {
+                        x: cameraPosition.x + cameraDirection.x,
+                        y: 0, // Keep on floor
+                        z: cameraPosition.z + cameraDirection.z
+                    };
+                }
                 
                 // Position the model
                 this.standModel.setAttribute('position', modelPosition);
                 
                 // Rotate to face the camera
+                const cameraPosition = this.camera.object3D.position;
                 const lookAtCamera = new THREE.Vector3().subVectors(
                     new THREE.Vector3(cameraPosition.x, 0, cameraPosition.z), 
                     new THREE.Vector3(modelPosition.x, 0, modelPosition.z)
@@ -345,7 +545,9 @@
                 console.log('Model placed at position:', modelPosition.x, modelPosition.y, modelPosition.z);
                 
                 this.placedModel = true;
-                clearInterval(this.detectFloorInterval);
+                if (this.detectFloorInterval) {
+                    clearInterval(this.detectFloorInterval);
+                }
             }
         });
 
