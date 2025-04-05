@@ -79,6 +79,21 @@
         .info-log {
             color: #55ff55;
         }
+        .action-button {
+            position: fixed;
+            bottom: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            border: none;
+            border-radius: 25px;
+            font-size: 18px;
+            cursor: pointer;
+            color: white;
+            background-color: #4CAF50;
+            z-index: 1000;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+        }
     </style>
 </head>
 <body>
@@ -91,6 +106,9 @@
 
     <!-- AR Status -->
     <div id="statusMessage" class="status-message hidden">Buscando superficies...</div>
+
+    <!-- Action Button (for placing model) -->
+    <button id="actionButton" class="action-button hidden">Colocar Modelo Aquí</button>
 
     <!-- Debug Panel -->
     <div id="debugPanel" class="debug-panel hidden">
@@ -132,6 +150,7 @@
             const standModel = document.getElementById('stand-model');
             const debugPanel = document.getElementById('debugPanel');
             const debugLog = document.getElementById('debugLog');
+            const actionButton = document.getElementById('actionButton');
             
             // State
             let xrSession = null;
@@ -139,6 +158,7 @@
             let lastHitTestTime = 0;
             let hitTestCount = 0;
             let frameCount = 0;
+            let usingFallbackPlacement = false;
             
             // Debug logging
             function logDebug(message, isError = false) {
@@ -187,9 +207,15 @@
                 logDebug(`Dispositivo: ${deviceInfo.mobile ? 'Móvil' : 'Desktop'} - ${deviceInfo.browser} ${deviceInfo.browserVersion}`);
                 logDebug(`Sistema: ${deviceInfo.ios ? 'iOS' : deviceInfo.android ? 'Android' : 'Otro'}`);
                 
+                // For Android Chrome (which has known hit-test issues)
+                const isAndroidChrome = deviceInfo.android && deviceInfo.browser.toLowerCase() === 'chrome';
+                if (isAndroidChrome) {
+                    logDebug("Detected Android Chrome - may have hit-test limitations", true);
+                }
+                
                 if (navigator.xr) {
                     logDebug("WebXR API disponible");
-                    
+
                     navigator.xr.isSessionSupported('immersive-ar')
                         .then(supported => {
                             if (!supported) {
@@ -200,11 +226,17 @@
                             
                             logDebug("AR soportado, solicitando sesión");
                             
-                            const sessionInit = {
-                                requiredFeatures: ['hit-test'],
-                                optionalFeatures: ['dom-overlay'],
-                                domOverlay: { root: document.body }
-                            };
+                            // For Android, try without requiring hit-test
+                            const sessionInit = isAndroidChrome ? 
+                                {
+                                    optionalFeatures: ['hit-test', 'dom-overlay'],
+                                    domOverlay: { root: document.body }
+                                } : 
+                                {
+                                    requiredFeatures: ['hit-test'],
+                                    optionalFeatures: ['dom-overlay'],
+                                    domOverlay: { root: document.body }
+                                };
                             
                             navigator.xr.requestSession('immersive-ar', sessionInit)
                                 .then(session => {
@@ -225,11 +257,27 @@
                                         return;
                                     }
                                     
+                                    // Enable manual placement after 5 seconds if hit test is not working
+                                    setTimeout(() => {
+                                        if (hitTestCount === 0 && !standModel.getAttribute('visible')) {
+                                            setupManualPlacement();
+                                        }
+                                    }, 5000);
+                                    
                                     session.requestReferenceSpace('local')
                                         .then(refSpace => {
                                             logDebug("Reference space obtenido: local");
                                             
-                                            session.requestHitTestSource({ space: refSpace })
+                                            // Try different hit test types
+                                            const hitTestOptions = [
+                                                { space: refSpace }, // Default
+                                                { space: refSpace, entityTypes: ['plane'] }, // Specific for planes
+                                                { space: refSpace, entityTypes: ['mesh'] }, // Specific for meshes
+                                                { space: refSpace, offsetRay: new XRRay(new DOMPoint(0, 0, 0, 1), new DOMPoint(0, 0, -1, 0)) } // Forward ray
+                                            ];
+                                            
+                                            // Try first hit test method
+                                            session.requestHitTestSource(hitTestOptions[0])
                                                 .then(hitTestSource => {
                                                     logDebug("Hit test source creado correctamente");
                                                     hitTestStartTime = performance.now();
@@ -237,12 +285,33 @@
                                                 })
                                                 .catch(error => {
                                                     logDebug(`Error al solicitar hit test source: ${error.message}`, true);
-                                                    showFallbackModel('Error al detectar superficies');
+                                                    
+                                                    // Try alternative hit test types if first fails
+                                                    for (let i = 1; i < hitTestOptions.length; i++) {
+                                                        try {
+                                                            session.requestHitTestSource(hitTestOptions[i])
+                                                                .then(hitTestSource => {
+                                                                    logDebug(`Método alternativo ${i} de hit test funcionando`);
+                                                                    hitTestStartTime = performance.now();
+                                                                    setupHitTesting(session, hitTestSource, refSpace);
+                                                                })
+                                                                .catch(e => {
+                                                                    logDebug(`Método alternativo ${i} falló: ${e.message}`, true);
+                                                                    
+                                                                    // If last method, switch to manual placement
+                                                                    if (i === hitTestOptions.length - 1) {
+                                                                        setupManualPlacement();
+                                                                    }
+                                                                });
+                                                        } catch (e) {
+                                                            logDebug(`Error al intentar método ${i}: ${e.message}`, true);
+                                                        }
+                                                    }
                                                 });
                                         })
                                         .catch(error => {
                                             logDebug(`Error al solicitar reference space: ${error.message}`, true);
-                                            showFallbackModel('Error configuración AR');
+                                            setupManualPlacement();
                                         });
                                 })
                                 .catch(error => {
@@ -260,14 +329,76 @@
                 }
             }
             
+            // Set up manual placement mode
+            function setupManualPlacement() {
+                if (usingFallbackPlacement || !xrSession) return;
+                
+                usingFallbackPlacement = true;
+                logDebug("Cambiando a modo de colocación manual", true);
+                statusMessage.textContent = "Toca el botón para colocar el modelo";
+                
+                // Show action button
+                actionButton.classList.remove('hidden');
+                actionButton.addEventListener('click', () => {
+                    placeModelManually();
+                });
+            }
+            
+            // Place model manually (without hit test)
+            function placeModelManually() {
+                if (!xrSession) return;
+                
+                logDebug("Colocando modelo manualmente (sin hit test)");
+                
+                // Use viewer pose to place in front
+                xrSession.requestAnimationFrame((time, frame) => {
+                    const viewerPose = frame.getViewerPose(frame.session.renderState.baseReferenceSpace);
+                    if (viewerPose) {
+                        const position = viewerPose.transform.position;
+                        const orientation = viewerPose.transform.orientation;
+                        
+                        // Calculate position 2 meters in front of user
+                        const forward = new THREE.Vector3(0, 0, -2);
+                        const quaternion = new THREE.Quaternion(
+                            orientation.x, orientation.y, orientation.z, orientation.w
+                        );
+                        forward.applyQuaternion(quaternion);
+                        
+                        const finalPosition = {
+                            x: position.x + forward.x,
+                            y: position.y - 0.5, // Place slightly below eye level
+                            z: position.z + forward.z
+                        };
+                        
+                        logDebug(`Colocando en: x=${finalPosition.x.toFixed(2)}, y=${finalPosition.y.toFixed(2)}, z=${finalPosition.z.toFixed(2)}`);
+                        
+                        // Position the model
+                        standModel.setAttribute('position', finalPosition);
+                        standModel.setAttribute('visible', true);
+                        
+                        // Update UI
+                        statusMessage.textContent = 'Toca el modelo para Instagram';
+                        actionButton.classList.add('hidden');
+                        
+                        // Add click listener
+                        standModel.addEventListener('click', openInstagram);
+                    } else {
+                        logDebug("No se pudo obtener viewer pose", true);
+                        showFallbackModel("Error colocando modelo");
+                    }
+                });
+            }
+            
             // Handle session end
             function onSessionEnd() {
                 logDebug("Sesión AR finalizada");
                 xrSession = null;
+                usingFallbackPlacement = false;
                 startScreen.classList.remove('hidden');
                 arScene.style.display = 'none';
                 statusMessage.classList.add('hidden');
                 debugPanel.classList.add('hidden');
+                actionButton.classList.add('hidden');
                 standModel.setAttribute('visible', false);
             }
             
@@ -291,10 +422,15 @@
                     
                     session.requestAnimationFrame(onFrame);
                     
-                    // Every 30 frames log basic diagnostics
+                    // Every 30 frames (about 0.5 seconds) log diagnostics
                     if (frameCount % 30 === 0) {
                         const elapsedTime = Math.floor((performance.now() - hitTestStartTime) / 1000);
                         logDebug(`Búsqueda de superficies: ${elapsedTime}s, Hits: ${hitTestCount}`);
+                    }
+                    
+                    // After 15 seconds with no hits, switch to manual
+                    if (frameCount > 900 && hitTestCount === 0 && !usingFallbackPlacement) {
+                        setupManualPlacement();
                     }
                     
                     try {
@@ -309,6 +445,7 @@
                                 logDebug("Primera superficie detectada!");
                             }
                             
+                            // Log hits at regular intervals
                             if (hitTestCount % 30 === 0) {
                                 const pose = hitTestResults[0].getPose(refSpace);
                                 if (pose) {
@@ -416,32 +553,6 @@
                 e.preventDefault();
                 startAR();
             });
-            
-            // Add a manual fallback button
-            setTimeout(() => {
-                const manualFallbackBtn = document.createElement('button');
-                manualFallbackBtn.className = 'button';
-                manualFallbackBtn.style.position = 'fixed';
-                manualFallbackBtn.style.bottom = '10px';
-                manualFallbackBtn.style.right = '10px';
-                manualFallbackBtn.style.zIndex = '1000';
-                manualFallbackBtn.style.display = 'none';
-                manualFallbackBtn.textContent = 'Mostrar Modelo';
-                
-                manualFallbackBtn.addEventListener('click', () => {
-                    showFallbackModel('Modelo mostrado manualmente');
-                });
-                
-                document.body.appendChild(manualFallbackBtn);
-                
-                // Show fallback button after 10 seconds if still searching for surfaces
-                setTimeout(() => {
-                    if (hitTestCount === 0 && !standModel.getAttribute('visible')) {
-                        manualFallbackBtn.style.display = 'block';
-                        logDebug("Mostrando botón de fallback debido a tiempo excedido", true);
-                    }
-                }, 10000);
-            }, 1000);
         });
     </script>
 </body>
