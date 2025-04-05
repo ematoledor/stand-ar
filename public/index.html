@@ -211,6 +211,64 @@
         @keyframes spin {
             to { transform: translate(-50%, -50%) rotate(360deg); }
         }
+        .surface-point {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background-color: rgba(76, 175, 80, 0.7);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 6;
+            box-shadow: 0 0 5px rgba(76, 175, 80, 0.8);
+        }
+        
+        .placement-indicator {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border: 2px solid rgba(76, 175, 80, 0.8);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 6;
+            display: none;
+        }
+        
+        .placement-indicator::before, .placement-indicator::after {
+            content: '';
+            position: absolute;
+            background-color: rgba(76, 175, 80, 0.8);
+        }
+        
+        .placement-indicator::before {
+            width: 2px;
+            height: 20px;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+        
+        .placement-indicator::after {
+            width: 20px;
+            height: 2px;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+        
+        .ar-status {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            z-index: 10;
+        }
     </style>
 </head>
 <body>
@@ -279,6 +337,10 @@
 
         <a-entity camera look-controls position="0 0 0"></a-entity>
     </a-scene>
+
+    <!-- Add surface detection UI elements -->
+    <div id="placementIndicator" class="placement-indicator"></div>
+    <div id="arStatus" class="ar-status">Buscando superficies...</div>
 
     <script>
         // WebXR AR Hit Test detection
@@ -640,7 +702,7 @@
             }
         });
 
-        // AR Tap handler component
+        // AR Tap handler component with surface detection visualization
         AFRAME.registerComponent('ar-tap-handler', {
             schema: {},
             
@@ -649,6 +711,12 @@
                 this.camera = document.querySelector('[camera]');
                 this.modelAnchor = document.getElementById('model-anchor');
                 this.standModel = document.getElementById('stand-model');
+                this.placementIndicator = document.getElementById('placementIndicator');
+                this.arStatus = document.getElementById('arStatus');
+                this.surfacePoints = [];
+                this.maxPoints = 30; // Maximum number of surface points to show
+                this.lastRaycast = 0;
+                this.raycastInterval = 100; // ms between raycasts
                 
                 // Set up event listeners
                 this.bindMethods();
@@ -661,15 +729,103 @@
             bindMethods: function() {
                 this.onTap = this.onTap.bind(this);
                 this.onModelClick = this.onModelClick.bind(this);
+                this.onMouseMove = this.onMouseMove.bind(this);
+                this.onTouchMove = this.onTouchMove.bind(this);
             },
             
             addListeners: function() {
                 const arOverlay = document.getElementById('arOverlay');
                 arOverlay.addEventListener('click', this.onTap);
                 arOverlay.addEventListener('touchend', this.onTap);
+                arOverlay.addEventListener('mousemove', this.onMouseMove);
+                arOverlay.addEventListener('touchmove', this.onTouchMove);
                 
                 this.standModel.addEventListener('click', this.onModelClick);
                 this.standModel.addEventListener('touchend', this.onModelClick);
+            },
+            
+            onMouseMove: function(event) {
+                if (this.modelPlaced) return;
+                this.detectSurface(event.clientX, event.clientY);
+            },
+            
+            onTouchMove: function(event) {
+                if (this.modelPlaced) return;
+                if (event.touches && event.touches.length > 0) {
+                    this.detectSurface(event.touches[0].clientX, event.touches[0].clientY);
+                }
+            },
+            
+            detectSurface: function(x, y) {
+                const now = Date.now();
+                if (now - this.lastRaycast < this.raycastInterval) return;
+                this.lastRaycast = now;
+                
+                // Convert to normalized device coordinates (-1 to +1)
+                const rect = this.el.canvas.getBoundingClientRect();
+                const tapX = ((x - rect.left) / rect.width) * 2 - 1;
+                const tapY = -((y - rect.top) / rect.height) * 2 + 1;
+                
+                // Create raycaster from camera
+                const raycaster = new THREE.Raycaster();
+                const mouse = new THREE.Vector2(tapX, tapY);
+                
+                // Get camera direction
+                raycaster.setFromCamera(mouse, this.el.sceneEl.camera);
+                
+                // Check intersection with ground plane
+                const groundPlane = document.getElementById('ground-plane').object3D;
+                const intersects = raycaster.intersectObject(groundPlane, true);
+                
+                if (intersects.length > 0) {
+                    // Show placement indicator
+                    this.placementIndicator.style.display = 'block';
+                    this.placementIndicator.style.left = x + 'px';
+                    this.placementIndicator.style.top = y + 'px';
+                    
+                    // Update status
+                    this.arStatus.textContent = 'Superficie detectada - Toca para colocar';
+                    
+                    // Add surface point (with limit)
+                    this.addSurfacePoint(x, y);
+                } else {
+                    this.placementIndicator.style.display = 'none';
+                    this.arStatus.textContent = 'Buscando superficies...';
+                }
+            },
+            
+            addSurfacePoint: function(x, y) {
+                // Create surface point element
+                const point = document.createElement('div');
+                point.className = 'surface-point';
+                point.style.left = x + 'px';
+                point.style.top = y + 'px';
+                document.body.appendChild(point);
+                
+                // Add to array
+                this.surfacePoints.push(point);
+                
+                // Remove oldest point if over limit
+                if (this.surfacePoints.length > this.maxPoints) {
+                    const oldPoint = this.surfacePoints.shift();
+                    document.body.removeChild(oldPoint);
+                }
+                
+                // Fade out and remove after 2 seconds
+                setTimeout(() => {
+                    point.style.opacity = '0';
+                    point.style.transition = 'opacity 0.5s ease';
+                    
+                    setTimeout(() => {
+                        if (document.body.contains(point)) {
+                            document.body.removeChild(point);
+                        }
+                        const index = this.surfacePoints.indexOf(point);
+                        if (index > -1) {
+                            this.surfacePoints.splice(index, 1);
+                        }
+                    }, 500);
+                }, 1500);
             },
             
             onTap: function(event) {
@@ -727,6 +883,16 @@
                     // Update UI
                     document.getElementById('tapIndicator').classList.add('hidden');
                     document.getElementById('footerText').classList.remove('hidden');
+                    this.placementIndicator.style.display = 'none';
+                    this.arStatus.style.display = 'none';
+                    
+                    // Remove all surface points
+                    this.surfacePoints.forEach(point => {
+                        if (document.body.contains(point)) {
+                            document.body.removeChild(point);
+                        }
+                    });
+                    this.surfacePoints = [];
                     
                     this.modelPlaced = true;
                     console.log('Model placed at position:', position.x, position.y, position.z);
