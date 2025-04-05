@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>AR Stand Model Viewer</title>
+    <title>AR Coparmex</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
     <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
     <script src="https://raw.githack.com/donmccurdy/aframe-extras/master/dist/aframe-extras.min.js"></script>
@@ -171,8 +171,8 @@
 <body>
     <!-- Initial UI with Start Button -->
     <div id="startScreen" class="ui-container">
-        <h1>Experiencia AR Coparmex</h1>
-        <p class="instructions">Esta experiencia AR te permite ver un modelo 3D del stand de Coparmex CDMX. Apunta al suelo para colocarlo y tócalo para visitar nuestro Instagram.</p>
+        <h1>Experiencia Coparmex</h1>
+        <p class="instructions">Esta experiencia AR te permite ver un modelo 3D del stand de Coparmex CDMX. Apunta al suelo para colocarlo y tócalo para registrarte.</p>
         <button id="startAR" class="button start-button">Iniciar Experiencia AR</button>
     </div>
 
@@ -184,7 +184,7 @@
     <div id="loadingMessage" class="centered">Cargando experiencia AR...</div>
     <div id="tapIndicator" class="tap-indicator">Apunta al suelo y toca para colocar el modelo</div>
     <div id="errorMessage" class="centered">Error de cámara - Por favor permite el acceso a la cámara y recarga la página</div>
-    <div class="footer-text">Toca el modelo para visitar Instagram</div>
+    <div class="footer-text">Toca el modelo para registrarte</div>
     
     <a-scene 
         embedded
@@ -414,29 +414,34 @@
             const tapIndicator = document.getElementById('tapIndicator');
             const standModel = document.getElementById('stand');
             
+            // Make sure iOS doesn't block event
+            startARButton.addEventListener('touchend', function(e) {
+                e.preventDefault();
+                startAR();
+            });
+            
             // Start AR button
-            startARButton.addEventListener('click', function() {
+            startARButton.addEventListener('click', function(e) {
+                e.preventDefault();
+                startAR();
+            });
+            
+            function startAR() {
                 startScreen.classList.add('hidden');
                 loadingMessage.style.display = 'block';
                 
-                // Request camera permissions
+                // For iOS devices: try to start AR without camera permission check first
+                if (navigator.userAgent.match(/iPhone|iPad|iPod/i)) {
+                    startARExperience();
+                    return;
+                }
+                
+                // Request camera permissions for Android and other devices
                 navigator.mediaDevices.getUserMedia({ video: true })
                     .then(function(stream) {
                         // Camera access granted
                         stream.getTracks().forEach(track => track.stop());
-                        // Show tap indicator after a delay to allow AR to initialize
-                        setTimeout(function() {
-                            loadingMessage.style.display = 'none';
-                            tapIndicator.style.display = 'block';
-                            
-                            // Add floor detector component to scene
-                            scene.setAttribute('floor-detector', '');
-                            
-                            // Ensure our AR hit test is running
-                            if (!scene.hasAttribute('ar-hit-test')) {
-                                scene.setAttribute('ar-hit-test', '');
-                            }
-                        }, 2000);
+                        startARExperience();
                     })
                     .catch(function(err) {
                         // Camera access denied
@@ -444,15 +449,39 @@
                         loadingMessage.style.display = 'none';
                         console.error("Camera error:", err);
                     });
-            });
+            }
+            
+            function startARExperience() {
+                // Show tap indicator after a delay to allow AR to initialize
+                setTimeout(function() {
+                    loadingMessage.style.display = 'none';
+                    tapIndicator.style.display = 'block';
+                    
+                    // Add floor detector component to scene
+                    scene.setAttribute('floor-detector', '');
+                    
+                    // Ensure our AR hit test is running
+                    if (!scene.hasAttribute('ar-hit-test')) {
+                        scene.setAttribute('ar-hit-test', '');
+                    }
+                }, 2000);
+            }
             
             // When assets are loaded
             document.querySelector('a-assets').addEventListener('loaded', function() {
                 console.log("Assets loaded");
             });
             
-            // Set up click event to open Instagram when model is clicked
+            // Set up click event to open registration when model is clicked
             standModel.addEventListener('click', function() {
+                if (standModel.getAttribute('visible') === true) {
+                    window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
+                }
+            });
+            
+            // Additional touch event for mobile
+            standModel.addEventListener('touchend', function(e) {
+                e.preventDefault();
                 if (standModel.getAttribute('visible') === true) {
                     window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
                 }
