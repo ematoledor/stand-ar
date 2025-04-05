@@ -83,10 +83,9 @@
             <a-entity
                 id="model"
                 gltf-model="stand-1.glb"
-                position="0 -0.25 -2" 
+                position="0 0 -4" 
                 scale="0.5 0.5 0.5"
                 rotation="0 0 0"
-                animation="property: rotation; to: 0 360 0; loop: true; dur: 30000; easing: linear"
                 onclick="visitLink()">
             </a-entity>
         </a-entity>
@@ -104,6 +103,8 @@
             // Hide loading after a delay
             setTimeout(function() {
                 document.getElementById('loading').classList.add('hidden');
+                // Auto-trigger visit link after a short delay
+                setTimeout(visitLink, 2000);
             }, 3000);
         }
         
