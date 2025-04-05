@@ -227,6 +227,9 @@
     </a-scene>
 
     <script>
+        // Add debugging to see what's happening
+        console.log("Script loaded");
+
         // Floor detection component
         AFRAME.registerComponent('floor-detector', {
             init: function() {
@@ -400,6 +403,8 @@
 
         // Main app initialization
         document.addEventListener('DOMContentLoaded', function() {
+            console.log("DOM loaded, initializing AR experience");
+            
             // Get UI elements
             const startScreen = document.getElementById('startScreen');
             const scene = document.getElementById('scene');
@@ -410,30 +415,58 @@
             const standModel = document.getElementById('stand');
             
             // Start AR button
-            startARButton.addEventListener('click', function() {
+            if (startARButton) {
+                console.log("Start AR button found, adding click listener");
+                startARButton.addEventListener('click', startARExperience);
+            } else {
+                console.error("Start AR button not found!");
+            }
+            
+            function startARExperience() {
+                console.log("Starting AR experience");
                 startScreen.classList.add('hidden');
                 loadingMessage.style.display = 'block';
                 
                 // Request camera permissions
-                navigator.mediaDevices.getUserMedia({ video: true })
+                navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
                     .then(function(stream) {
+                        console.log("Camera access granted");
                         // Camera access granted
                         stream.getTracks().forEach(track => track.stop());
-                        // Show tap indicator after a delay to allow AR to initialize
+                        
+                        // Initialize AR scene after a delay
                         setTimeout(function() {
                             loadingMessage.style.display = 'none';
                             tapIndicator.style.display = 'block';
                             
                             // Add floor detector component to scene
                             scene.setAttribute('floor-detector', '');
-                        }, 2000);
+                            console.log("Floor detector added to scene");
+                        }, 1500);
                     })
                     .catch(function(err) {
                         // Camera access denied
+                        console.error("Camera error:", err);
                         errorMessage.style.display = 'block';
                         loadingMessage.style.display = 'none';
-                        console.error("Camera error:", err);
                     });
+            }
+            
+            // AR.js initialization events
+            scene.addEventListener('loaded', function() {
+                console.log("A-Frame scene loaded");
+            });
+            
+            scene.addEventListener('renderstart', function() {
+                console.log("A-Frame rendering started");
+            });
+            
+            window.addEventListener('camera-init', function() {
+                console.log("AR.js camera initialized");
+            });
+            
+            window.addEventListener('arjs-video-loaded', function() {
+                console.log("AR.js video loaded");
             });
             
             // When assets are loaded
@@ -443,13 +476,15 @@
             
             // Set up click event to open Instagram when model is clicked
             standModel.addEventListener('click', function() {
-                if (standModel.getAttribute('visible') === true) {
+                console.log("Model clicked");
+                if (standModel.getAttribute('visible')) {
                     window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
                 }
             });
 
             // Handle camera permissions error
-            window.addEventListener('camera-error', function() {
+            window.addEventListener('camera-error', function(error) {
+                console.error("AR.js camera error:", error);
                 errorMessage.style.display = 'block';
                 loadingMessage.style.display = 'none';
             });
