@@ -128,12 +128,13 @@
             width: 100px;
             height: 100px;
             border-radius: 50%;
-            border: 3px solid #4CAF50;
+            border: 3px solid #d32f2f;
             display: none;
             z-index: 10;
             pointer-events: none;
             opacity: 0.7;
-            box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+            box-shadow: 0 0 10px rgba(211, 47, 47, 0.5);
+            background-color: rgba(211, 47, 47, 0.1);
         }
         .pulsate {
             animation: pulsate 1s ease-out infinite;
@@ -153,8 +154,9 @@
             }
         }
         .floor-detected {
-            background-color: rgba(76, 175, 80, 0.3);
+            background-color: rgba(76, 175, 80, 0.2);
             border-color: #4CAF50;
+            box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
         }
         .logo {
             max-width: 200px;
@@ -252,19 +254,40 @@
                 
                 // Set up continuous floor detection
                 this.detectFloorInterval = setInterval(this.detectFloor.bind(this), 100);
+                
+                // Start with no floor detected
+                this.detectionRing.classList.remove('floor-detected');
+                this.tapIndicator.textContent = 'Buscando superficie...';
+                
+                // Start floor detection cycle
+                this.floorDetectionCycle();
+            },
+            
+            floorDetectionCycle: function() {
+                if (this.placedModel) return;
+                
+                // Simulate floor detection with alternating states
+                setTimeout(() => {
+                    if (this.placedModel) return;
+                    this.isFloorDetected = true;
+                    this.detectionRing.classList.add('floor-detected');
+                    this.tapIndicator.textContent = '¡Superficie detectada! Toca para colocar el modelo';
+                    
+                    setTimeout(() => {
+                        if (this.placedModel) return;
+                        this.isFloorDetected = false;
+                        this.detectionRing.classList.remove('floor-detected');
+                        this.tapIndicator.textContent = 'Buscando superficie...';
+                        
+                        this.floorDetectionCycle();
+                    }, 2000 + Math.random() * 1000);
+                }, 1000 + Math.random() * 1000);
             },
             
             detectFloor: function() {
                 if (this.placedModel) {
                     clearInterval(this.detectFloorInterval);
                     return;
-                }
-                
-                // Always consider floor detected with AR.js
-                if (!this.isFloorDetected) {
-                    this.detectionRing.classList.add('floor-detected');
-                    this.isFloorDetected = true;
-                    this.tapIndicator.textContent = 'Toca para colocar el modelo';
                 }
             },
             
@@ -292,7 +315,7 @@
                 const cameraPosition = this.camera.object3D.position;
                 const cameraDirection = new THREE.Vector3(0, 0, -1);
                 cameraDirection.applyQuaternion(this.camera.object3D.quaternion);
-                cameraDirection.multiplyScalar(3); // Place 3 meters in front
+                cameraDirection.multiplyScalar(5); // Place 5 meters in front (changed from 3)
                 
                 const modelPosition = {
                     x: cameraPosition.x + cameraDirection.x,
