@@ -122,9 +122,9 @@
             gltf-model="#stand-model"
             position="0 0 -5"
             scale="2 2 2"
-            rotation="-90 0 0"
+            rotation="0 0 0"
             class="clickable"
-            animation="property: rotation; to: -90 360 0; dur: 10000; easing: linear; loop: true;"
+            animation="property: rotation; to: 0 360 0; dur: 10000; easing: linear; loop: true;"
             visible="false">
         </a-entity>
 
@@ -153,7 +153,7 @@
                 // Position the model 2 meters in front of the camera on the ground
                 this.standModel.setAttribute('position', {
                     x: 0,
-                    y: -0.5, // Slightly below eye level to make it appear on the ground
+                    y: 0, // On the ground
                     z: -2    // 2 meters away from the user
                 });
                 this.standModel.setAttribute('visible', true);
