@@ -6,7 +6,6 @@
     <title>AR Stand Model Viewer</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
     <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.0/build/qrcode.min.js"></script>
     <style>
         body {
             margin: 0;
@@ -46,25 +45,26 @@
             display: none;
         }
         .button {
-            padding: 10px 20px;
+            padding: 12px 24px;
             border: none;
             border-radius: 5px;
             margin: 10px;
-            font-size: 16px;
+            font-size: 18px;
             cursor: pointer;
             color: white;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
         }
         .start-button {
             background-color: #4CAF50;
+            transition: all 0.3s ease;
         }
-        #qrcode {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
+        .start-button:hover {
+            transform: scale(1.05);
+            background-color: #45a049;
         }
         h1, h2 {
             text-align: center;
+            margin-bottom: 30px;
         }
         .footer-text {
             position: fixed;
@@ -155,15 +155,24 @@
             background-color: rgba(76, 175, 80, 0.3);
             border-color: #4CAF50;
         }
+        .logo {
+            max-width: 200px;
+            margin-bottom: 20px;
+        }
+        .instructions {
+            margin-bottom: 30px;
+            max-width: 80%;
+            text-align: center;
+            line-height: 1.5;
+        }
     </style>
 </head>
 <body>
-    <!-- Initial UI with QR Code -->
+    <!-- Initial UI with Start Button -->
     <div id="startScreen" class="ui-container">
-        <h1>AR Stand Model Viewer</h1>
-        <p>Scan this QR code with another device or press Start AR below</p>
-        <div id="qrcode"></div>
-        <button id="startAR" class="button start-button">Start AR</button>
+        <h1>Experiencia AR Coparmex</h1>
+        <p class="instructions">Esta experiencia AR te permite ver un modelo 3D del stand de Coparmex CDMX. Apunta al suelo para colocarlo y tócalo para visitar nuestro Instagram.</p>
+        <button id="startAR" class="button start-button">Iniciar Experiencia AR</button>
     </div>
 
     <!-- Floor detection UI -->
@@ -171,10 +180,10 @@
     <div id="detectionRing" class="detection-ring"></div>
 
     <!-- AR Scene -->
-    <div id="loadingMessage" class="centered">Loading AR Experience...</div>
-    <div id="tapIndicator" class="tap-indicator">Point at the floor and tap to place the model</div>
-    <div id="errorMessage" class="centered">Camera error - Please allow camera access and reload the page</div>
-    <div class="footer-text">Tap on the model to visit Instagram</div>
+    <div id="loadingMessage" class="centered">Cargando experiencia AR...</div>
+    <div id="tapIndicator" class="tap-indicator">Apunta al suelo y toca para colocar el modelo</div>
+    <div id="errorMessage" class="centered">Error de cámara - Por favor permite el acceso a la cámara y recarga la página</div>
+    <div class="footer-text">Toca el modelo para visitar Instagram</div>
     
     <a-scene 
         embedded
@@ -206,7 +215,7 @@
             id="stand"
             gltf-model="#stand-model"
             position="0 0 -5"
-            scale="2 2 2"
+            scale="1.5 1.5 1.5"
             rotation="0 0 0"
             class="clickable"
             animation="property: rotation; to: 0 360 0; dur: 10000; easing: linear; loop: true;"
@@ -268,14 +277,14 @@
                     if (!this.isFloorDetected) {
                         this.detectionRing.classList.add('floor-detected');
                         this.isFloorDetected = true;
-                        this.tapIndicator.textContent = 'Floor detected! Tap to place model';
+                        this.tapIndicator.textContent = '¡Suelo detectado! Toca para colocar el modelo';
                     }
                 } else {
                     // Floor not detected
                     if (this.isFloorDetected) {
                         this.detectionRing.classList.remove('floor-detected');
                         this.isFloorDetected = false;
-                        this.tapIndicator.textContent = 'Point at the floor and tap to place the model';
+                        this.tapIndicator.textContent = 'Apunta al suelo y toca para colocar el modelo';
                     }
                 }
             },
@@ -299,11 +308,42 @@
                     // Place model at intersection point
                     const intersection = intersects[0].point;
                     
-                    // Position the model at the intersection point
+                    // Calculate position 2 meters in front of the camera on the floor
+                    // This ensures the model is placed at a comfortable distance
+                    const distanceFromCamera = 2;
+                    const cameraPositionXZ = new THREE.Vector2(cameraPosition.x, cameraPosition.z);
+                    const directionXZ = new THREE.Vector2(cameraDirection.x, cameraDirection.z).normalize();
+                    const targetXZ = cameraPositionXZ.clone().add(directionXZ.multiplyScalar(distanceFromCamera));
+                    
+                    // Position the model at the calculated point on the floor
                     this.standModel.setAttribute('position', {
-                        x: intersection.x,
+                        x: targetXZ.x,
                         y: 0, // Ensure it's on the ground
-                        z: intersection.z
+                        z: targetXZ.y // Note: XZ plane in THREE maps to XY in 2D vector
+                    });
+                    
+                    // Rotate model to face the camera
+                    const modelPosition = new THREE.Vector3(targetXZ.x, 0, targetXZ.y);
+                    const lookAtCamera = new THREE.Vector3().subVectors(
+                        new THREE.Vector3(cameraPosition.x, 0, cameraPosition.z), 
+                        modelPosition
+                    ).normalize();
+                    const angleY = Math.atan2(lookAtCamera.x, lookAtCamera.z);
+                    this.standModel.setAttribute('rotation', {
+                        x: 0,
+                        y: THREE.MathUtils.radToDeg(angleY),
+                        z: 0
+                    });
+                    
+                    // Update animation to rotate from the new Y angle
+                    const newYAngle = THREE.MathUtils.radToDeg(angleY);
+                    this.standModel.setAttribute('animation', {
+                        property: 'rotation',
+                        from: `0 ${newYAngle} 0`,
+                        to: `0 ${newYAngle + 360} 0`,
+                        dur: 10000,
+                        easing: 'linear',
+                        loop: true
                     });
                     
                     // Hide UI elements
@@ -340,19 +380,6 @@
             const startARButton = document.getElementById('startAR');
             const tapIndicator = document.getElementById('tapIndicator');
             const standModel = document.getElementById('stand');
-            
-            // Generate QR code
-            const currentUrl = window.location.href;
-            QRCode.toCanvas(document.getElementById('qrcode'), currentUrl, {
-                width: 200,
-                margin: 2,
-                color: {
-                    dark: '#000000',
-                    light: '#ffffff'
-                }
-            }, function(error) {
-                if (error) console.error(error);
-            });
             
             // Start AR button
             startARButton.addEventListener('click', function() {
