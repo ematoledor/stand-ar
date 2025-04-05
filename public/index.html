@@ -303,8 +303,7 @@
         embedded
         vr-mode-ui="enabled: false"
         renderer="logarithmicDepthBuffer: true; precision: medium; antialias: true;"
-        cursor="rayOrigin: mouse"
-        ar-tap-handler>
+        cursor="rayOrigin: mouse">
         
         <a-assets>
             <a-asset-item id="stand-model" src="stand-1.glb"></a-asset-item>
@@ -342,368 +341,225 @@
     <div id="arStatus" class="ar-status">Buscando superficies...</div>
 
     <script>
-        // AR Manager component to handle both WebXR and AR.js
-        AFRAME.registerComponent('ar-tap-handler', {
-            schema: {},
+        // Simplify initialization
+        document.addEventListener('DOMContentLoaded', function() {
+            const startScreen = document.getElementById('startScreen');
+            const loadingMessage = document.getElementById('loadingMessage');
+            const startButton = document.getElementById('startButton');
+            const arScene = document.getElementById('arScene');
+            const tapIndicator = document.getElementById('tapIndicator');
+            const arStatus = document.getElementById('arStatus');
+            const arOverlay = document.getElementById('arOverlay');
+            const webxrNotice = document.getElementById('webxr-notice');
+            const modelAnchor = document.getElementById('model-anchor');
+            const standModel = document.getElementById('stand-model');
+            const placementIndicator = document.getElementById('placementIndicator');
             
-            init: function() {
-                this.modelPlaced = false;
-                this.camera = document.querySelector('[camera]');
-                this.modelAnchor = document.getElementById('model-anchor');
-                this.standModel = document.getElementById('stand-model');
-                this.placementIndicator = document.getElementById('placementIndicator');
-                this.arStatus = document.getElementById('arStatus');
-                this.webxrNotice = document.getElementById('webxr-notice');
-                this.surfacePoints = [];
-                this.maxPoints = 30; // Maximum number of surface points to show
-                this.lastRaycast = 0;
-                this.raycastInterval = 100; // ms between raycasts
-                this.isFloorDetected = false;
-                
-                // WebXR support variables
-                this.xrSession = null;
-                this.xrHitTestSource = null;
-                this.xrViewerSpace = null;
-                this.xrRefSpace = null;
-                this.hitTestActive = false;
-                this.usingWebXR = false;
-                
-                // Set up event listeners
-                this.bindMethods();
-                this.addListeners();
-                
-                // Initialize model as not visible
-                this.standModel.setAttribute('visible', false);
-                
-                // Check for WebXR support and initialize if available
-                console.log("🚀 Starting AR experience initialization");
-                this.checkWebXRSupport();
-            },
+            // AR state
+            let modelPlaced = false;
+            let xrSession = null;
+            let xrHitTestSource = null;
+            let xrRefSpace = null;
+            let xrViewerSpace = null;
+            let lastHitPosition = null;
+            let isFloorDetected = false;
+            let usingWebXR = false;
+            let placementPoints = [];
+
+            // Initially hide AR scene
+            arScene.style.display = 'none';
+            arOverlay.classList.add('hidden');
             
-            bindMethods: function() {
-                this.onTap = this.onTap.bind(this);
-                this.onModelClick = this.onModelClick.bind(this);
-                this.onMouseMove = this.onMouseMove.bind(this);
-                this.onTouchMove = this.onTouchMove.bind(this);
-                this.onXRFrame = this.onXRFrame.bind(this);
-                this.onARDisplay = this.onARDisplay.bind(this);
-            },
-            
-            addListeners: function() {
-                // Add tap/click listeners for placement
-                this.arOverlay.addEventListener('click', this.onTap);
-                this.arOverlay.addEventListener('touchend', this.onTap);
-                
-                // Add mouse/touch move listeners for surface detection visualization
-                if (!this.usingWebXR) {
-                    this.arOverlay.addEventListener('mousemove', this.onMouseMove);
-                    this.arOverlay.addEventListener('touchmove', this.onTouchMove);
-                }
-                
-                // Add model click listener for Instagram link
-                this.standModel.addEventListener('click', this.onModelClick);
-                this.standModel.addEventListener('touchend', this.onModelClick);
-                
-                // Make sure overlay is visible
-                this.arOverlay.classList.remove('hidden');
-                
-                // Show tap indicator
-                document.getElementById('tapIndicator').classList.remove('hidden');
-            },
-            
-            checkWebXRSupport: function() {
-                console.log('🔍 Checking WebXR support...');
-                
+            // Set up AR.js if needed separately
+            function setupARjs() {
+                console.log('Setting up AR.js');
+                arScene.setAttribute('arjs', 'sourceType: webcam; debugUIEnabled: false; trackingMethod: best; detectionMode: mono;');
+                arStatus.textContent = 'Usando AR.js para realidad aumentada';
+                isFloorDetected = true;
+                placementIndicator.style.display = 'block';
+            }
+
+            // WebXR session setup
+            function startWebXR() {
                 if (!navigator.xr) {
-                    console.log('❌ WebXR API not available in this browser');
-                    window.isWebXRSupported = false;
-                    this.arStatus.textContent = 'Usando AR.js (WebXR no disponible)';
-                    this.useARjs();
+                    console.log('WebXR not supported');
+                    setupARjs();
                     return;
                 }
-                
+
+                console.log('Checking WebXR support...');
                 navigator.xr.isSessionSupported('immersive-ar')
                     .then(supported => {
-                        window.isWebXRSupported = supported;
-                        
-                        if (supported) {
-                            console.log('✅ WebXR AR is supported!');
-                            this.webxrNotice.style.display = 'block';
-                            this.initWebXR();
-                        } else {
-                            console.log('❌ WebXR AR is not supported on this device');
-                            this.arStatus.textContent = 'Usando AR.js (WebXR no soportado)';
-                            this.useARjs();
+                        if (!supported) {
+                            console.log('WebXR AR not supported');
+                            setupARjs();
+                            return;
                         }
-                    })
-                    .catch(err => {
-                        console.error('❌ Error checking WebXR support:', err);
-                        window.isWebXRSupported = false;
-                        this.arStatus.textContent = 'Usando AR.js (Error de WebXR)';
-                        this.useARjs();
-                    });
-            },
-            
-            initWebXR: function() {
-                // Already gave appropriate error messages in checkWebXRSupport if WebXR isn't available
-                if (!navigator.xr || !window.isWebXRSupported) {
-                    console.log('📱 WebXR API not supported - falling back to AR.js');
-                    // Set AR.js mode now
-                    this.useARjs();
-                    return;
-                }
-                
-                console.log('🔍 Starting WebXR session...');
-                this.arStatus.textContent = 'Iniciando WebXR...';
-                
-                // Use only optional features to maximize compatibility
-                const sessionInit = {
-                    optionalFeatures: ['hit-test', 'dom-overlay'],
-                    domOverlay: { root: document.getElementById('arOverlay') }
-                };
-                
-                console.log('📋 WebXR session options:', sessionInit);
-                
-                // Start AR session
-                navigator.xr.requestSession('immersive-ar', sessionInit)
-                    .then(session => {
-                        console.log('✅ WebXR session created!');
-                        this.xrSession = session;
-                        this.usingWebXR = true;
                         
-                        // Add session end listener
-                        session.addEventListener('end', () => {
-                            console.log('❌ WebXR session ended');
-                            this.hitTestActive = false;
-                            this.xrHitTestSource = null;
-                            this.xrSession = null;
-                            this.usingWebXR = false;
-                            
-                            // Only enable AR.js if we haven't placed the model yet
-                            if (!this.modelPlaced) {
-                                this.useARjs();
-                            }
+                        console.log('WebXR AR is supported, starting session');
+                        arStatus.textContent = 'Iniciando WebXR...';
+
+                        const sessionInit = { 
+                            optionalFeatures: ['hit-test'] 
+                        };
+
+                        // Request session
+                        navigator.xr.requestSession('immersive-ar', sessionInit)
+                            .then(session => {
+                                console.log('WebXR session started');
+                                xrSession = session;
+                                usingWebXR = true;
+                                arStatus.textContent = 'WebXR iniciado';
+                                webxrNotice.style.display = 'block';
+
+                                // Set up session
+                                initWebXRSession(session);
+
+                                // Handle session end
+                                session.addEventListener('end', () => {
+                                    console.log('WebXR session ended');
+                                    if (!modelPlaced) {
+                                        setupARjs();
+                                    }
+                                });
+                            })
+                            .catch(error => {
+                                console.error('Failed to start WebXR session:', error);
+                                setupARjs();
+                            });
+                    })
+                    .catch(error => {
+                        console.error('Error checking WebXR support:', error);
+                        setupARjs();
+                    });
+            }
+            
+            // Initialize WebXR session
+            function initWebXRSession(session) {
+                // Get WebGL context from A-Frame
+                const gl = arScene.renderer.getContext();
+                
+                // Make WebGL context compatible with WebXR
+                gl.makeXRCompatible()
+                    .then(() => {
+                        // Set up rendering
+                        const xrLayer = new XRWebGLLayer(session, gl);
+                        session.updateRenderState({
+                            baseLayer: xrLayer
                         });
                         
-                        // Get the WebGL context and make it XR compatible
-                        const gl = this.el.sceneEl.renderer.getContext();
-                        
-                        gl.makeXRCompatible()
-                            .then(() => {
-                                console.log('🎮 WebGL context made XR compatible');
-                                
-                                // Set up XR layer
-                                const xrLayer = new XRWebGLLayer(session, gl);
-                                session.updateRenderState({
-                                    baseLayer: xrLayer
-                                });
-                                
-                                // Request reference spaces, starting with local-floor (best for AR)
-                                return session.requestReferenceSpace('local-floor');
-                            })
+                        // Request reference spaces
+                        session.requestReferenceSpace('local-floor')
                             .then(refSpace => {
-                                console.log('🌎 Using local-floor reference space');
-                                this.xrRefSpace = refSpace;
-                                
-                                // Now get viewer space for hit testing
+                                xrRefSpace = refSpace;
                                 return session.requestReferenceSpace('viewer');
                             })
                             .then(viewerSpace => {
-                                console.log('👁️ Got viewer reference space');
-                                this.xrViewerSpace = viewerSpace;
+                                xrViewerSpace = viewerSpace;
                                 
-                                // Try to set up hit test source, but keep going even if it fails
-                                session.requestHitTestSource({
+                                // Set up hit testing
+                                return session.requestHitTestSource({
                                     space: viewerSpace
-                                })
-                                .then(hitTestSource => {
-                                    console.log('🎯 Hit test source created');
-                                    this.xrHitTestSource = hitTestSource;
-                                    this.hitTestActive = true;
-                                    this.arStatus.textContent = 'Detección de superficies WebXR activa';
-                                    this.webxrNotice.style.display = 'block';
-                                })
-                                .catch(err => {
-                                    console.warn('⚠️ Hit test source creation failed, but continuing:', err);
-                                    this.arStatus.textContent = 'WebXR activo (sin detección de superficies)';
-                                })
-                                .finally(() => {
-                                    // Start the XR animation loop regardless of hit test availability
-                                    session.requestAnimationFrame(this.onXRFrame);
                                 });
                             })
-                            .catch(err => {
-                                console.error('❌ Error setting up WebXR spaces:', err);
-                                this.fallbackToARjs();
+                            .then(hitTestSource => {
+                                xrHitTestSource = hitTestSource;
+                                console.log('Hit test source created');
+                                
+                                // Start the rendering loop
+                                session.requestAnimationFrame(onXRFrame);
+                            })
+                            .catch(error => {
+                                console.error('Error setting up WebXR:', error);
                             });
                     })
-                    .catch(err => {
-                        console.error('❌ Failed to start WebXR session:', err);
-                        let errorDetail = '';
-                        if (err.name) {
-                            errorDetail = ` (${err.name})`;
-                            if (err.message) {
-                                errorDetail += `: ${err.message}`;
-                            }
-                        }
-                        console.log(`📱 WebXR error${errorDetail} - falling back to AR.js`);
-                        this.arStatus.textContent = `Usando AR.js (WebXR no disponible${errorDetail})`;
-                        this.fallbackToARjs();
+                    .catch(error => {
+                        console.error('Error making WebGL compatible with WebXR:', error);
+                        session.end();
+                        setupARjs();
                     });
-            },
+            }
             
-            useARjs: function() {
-                console.log('📱 Initializing AR.js mode');
+            // Handle WebXR animation frame
+            function onXRFrame(time, frame) {
+                const session = xrSession;
+                if (!session || modelPlaced) return;
                 
-                // Actually apply AR.js component to scene now
-                document.querySelector('a-scene').setAttribute('arjs', 'sourceType: webcam; debugUIEnabled: false; trackingMethod: best; detectionMode: mono;');
+                // Queue next frame
+                session.requestAnimationFrame(onXRFrame);
                 
-                this.arStatus.textContent = 'Usando AR.js para realidad aumentada';
+                // Skip if no hit test source
+                if (!xrHitTestSource) return;
                 
-                // Show green surfaces by default in AR.js mode to improve UX
-                this.isFloorDetected = true;
-                this.placementIndicator.style.display = 'block';
-            },
-            
-            onXRFrame: function(time, frame) {
-                const session = this.xrSession;
-                if (!session || this.modelPlaced) return;
+                // Get hit test results
+                const hitTestResults = frame.getHitTestResults(xrHitTestSource);
                 
-                try {
-                    // Request next frame first to ensure loop continues even if there's an error
-                    session.requestAnimationFrame(this.onXRFrame);
+                if (hitTestResults.length > 0) {
+                    const hit = hitTestResults[0];
+                    const pose = hit.getPose(xrRefSpace);
                     
-                    // Skip hit testing if it's not available
-                    if (!this.hitTestActive || !this.xrHitTestSource) return;
-                    
-                    // Get hit test results
-                    const hitTestResults = frame.getHitTestResults(this.xrHitTestSource);
-                    
-                    if (hitTestResults.length > 0) {
-                        // We got a hit
-                        const hit = hitTestResults[0];
-                        const pose = hit.getPose(this.xrRefSpace);
+                    if (pose) {
+                        const position = pose.transform.position;
+                        lastHitPosition = position;
                         
-                        if (pose) {
-                            // Get hit position
-                            const position = pose.transform.position;
-                            this.lastHitPosition = position;
-                            
-                            // Update UI
-                            if (!this.isFloorDetected) {
-                                this.isFloorDetected = true;
-                                this.arStatus.textContent = 'Superficie detectada - Toca para colocar';
-                            }
-                            
-                            // Show visual indicator
-                            const screenCoords = this.projectPointToScreen(position);
-                            if (screenCoords) {
-                                this.placementIndicator.style.display = 'block';
-                                this.placementIndicator.style.left = screenCoords.x + 'px';
-                                this.placementIndicator.style.top = screenCoords.y + 'px';
-                                
-                                // Add surface point visualization
-                                this.addSurfacePoint(screenCoords.x, screenCoords.y);
-                            }
+                        // Update UI to show floor detected
+                        if (!isFloorDetected) {
+                            isFloorDetected = true;
+                            arStatus.textContent = 'Superficie detectada - Toca para colocar';
                         }
-                    } else {
-                        // No hit
-                        if (this.isFloorDetected) {
-                            this.isFloorDetected = false;
-                            this.arStatus.textContent = 'Mueva el dispositivo para detectar superficies';
-                            this.placementIndicator.style.display = 'none';
+                        
+                        // Project to screen and show indicator
+                        const coords = projectToScreen(position);
+                        if (coords) {
+                            placementIndicator.style.display = 'block';
+                            placementIndicator.style.left = coords.x + 'px';
+                            placementIndicator.style.top = coords.y + 'px';
+                            
+                            addPlacementPoint(coords.x, coords.y);
                         }
                     }
-                } catch (err) {
-                    console.error('❌ Error in XR frame:', err);
-                }
-            },
-            
-            fallbackToARjs: function() {
-                console.log('⚠️ Falling back to AR.js mode');
-                
-                // End any ongoing WebXR session
-                if (this.xrSession) {
-                    try {
-                        this.xrSession.end();
-                    } catch (err) {
-                        console.error('❌ Error ending WebXR session during fallback:', err);
+                } else {
+                    if (isFloorDetected) {
+                        isFloorDetected = false;
+                        arStatus.textContent = 'Buscando superficies...';
+                        placementIndicator.style.display = 'none';
                     }
                 }
-                
-                this.usingWebXR = false;
-                this.useARjs();
-            },
+            }
             
-            projectPointToScreen: function(point) {
-                if (!this.el.sceneEl.camera) return null;
+            // Project a point to screen coordinates
+            function projectToScreen(point) {
+                if (!arScene.camera) return null;
                 
-                // Convert WebXR point to Three.js Vector3
                 const vector = new THREE.Vector3(point.x, point.y, point.z);
+                vector.project(arScene.camera);
                 
-                // Project to screen space
-                vector.project(this.el.sceneEl.camera);
-                
-                // Convert to screen coordinates
                 const widthHalf = window.innerWidth / 2;
                 const heightHalf = window.innerHeight / 2;
                 
-                const x = (vector.x * widthHalf) + widthHalf;
-                const y = -(vector.y * heightHalf) + heightHalf;
-                
-                return {x, y};
-            },
+                return {
+                    x: (vector.x * widthHalf) + widthHalf,
+                    y: -(vector.y * heightHalf) + heightHalf
+                };
+            }
             
-            onMouseMove: function(event) {
-                if (this.modelPlaced || this.usingWebXR) return;
-                this.detectSurface(event.clientX, event.clientY);
-            },
-            
-            onTouchMove: function(event) {
-                if (this.modelPlaced || this.usingWebXR) return;
-                if (event.touches && event.touches.length > 0) {
-                    this.detectSurface(event.touches[0].clientX, event.touches[0].clientY);
-                }
-            },
-            
-            detectSurface: function(x, y) {
-                // Skip if using WebXR
-                if (this.usingWebXR) return;
-                
-                // Rate limit
-                const now = Date.now();
-                if (now - this.lastRaycast < this.raycastInterval) return;
-                this.lastRaycast = now;
-                
-                // In AR.js mode, display indicator at the cursor position
-                this.placementIndicator.style.display = 'block';
-                this.placementIndicator.style.left = x + 'px';
-                this.placementIndicator.style.top = y + 'px';
-                
-                // Add surface point for visualization
-                this.addSurfacePoint(x, y);
-            },
-            
-            addSurfacePoint: function(x, y) {
-                // Create surface point element
+            // Add a placement point visualization
+            function addPlacementPoint(x, y) {
                 const point = document.createElement('div');
                 point.className = 'surface-point';
                 point.style.left = x + 'px';
                 point.style.top = y + 'px';
                 document.body.appendChild(point);
                 
-                // Add to array
-                this.surfacePoints.push(point);
+                placementPoints.push(point);
                 
-                // Remove oldest point if over limit
-                if (this.surfacePoints.length > this.maxPoints) {
-                    const oldPoint = this.surfacePoints.shift();
+                if (placementPoints.length > 20) {
+                    const oldPoint = placementPoints.shift();
                     if (document.body.contains(oldPoint)) {
                         document.body.removeChild(oldPoint);
                     }
                 }
                 
-                // Fade out
                 setTimeout(() => {
                     if (document.body.contains(point)) {
                         point.style.opacity = '0';
@@ -713,89 +569,82 @@
                             if (document.body.contains(point)) {
                                 document.body.removeChild(point);
                             }
-                            const index = this.surfacePoints.indexOf(point);
-                            if (index > -1) {
-                                this.surfacePoints.splice(index, 1);
-                            }
                         }, 500);
                     }
                 }, 1500);
-            },
+            }
             
-            onTap: function(event) {
-                if (this.modelPlaced) return;
+            // Handle tapping to place model
+            function placeModel(event) {
+                if (modelPlaced) return;
                 
-                // Prevent default
-                if (event.preventDefault) event.preventDefault();
-                
-                // Only proceed if surface detected
-                if (!this.isFloorDetected && this.usingWebXR) {
-                    console.log('No surface detected, cannot place model');
+                // No placement if no surface detected in WebXR mode
+                if (usingWebXR && !isFloorDetected) {
+                    console.log('No surface detected');
                     return;
                 }
                 
                 let position;
                 
-                if (this.usingWebXR && this.lastHitPosition) {
+                if (usingWebXR && lastHitPosition) {
                     // Use WebXR hit position
                     position = {
-                        x: this.lastHitPosition.x,
-                        y: this.lastHitPosition.y,
-                        z: this.lastHitPosition.z
+                        x: lastHitPosition.x,
+                        y: lastHitPosition.y,
+                        z: lastHitPosition.z
                     };
                 } else {
                     // Use camera-relative position for AR.js
-                    const cameraPosition = this.camera.object3D.position;
-                    const cameraDirection = new THREE.Vector3(0, 0, -1);
-                    cameraDirection.applyQuaternion(this.camera.object3D.quaternion);
-                    cameraDirection.multiplyScalar(5); // Place 5 meters away
+                    const camera = document.querySelector('[camera]').object3D;
+                    const direction = new THREE.Vector3(0, 0, -1);
+                    direction.applyQuaternion(camera.quaternion);
+                    direction.multiplyScalar(5);
                     
                     position = {
-                        x: cameraPosition.x + cameraDirection.x,
-                        y: 0, // Keep on ground
-                        z: cameraPosition.z + cameraDirection.z
+                        x: camera.position.x + direction.x,
+                        y: 0,
+                        z: camera.position.z + direction.z
                     };
                 }
                 
-                // Position the model anchor
-                this.modelAnchor.setAttribute('position', position);
+                // Position the model
+                modelAnchor.setAttribute('position', position);
                 
                 // Rotate to face camera
-                const cameraPos = this.camera.object3D.position;
-                const direction = new THREE.Vector3();
-                direction.subVectors(
-                    new THREE.Vector3(cameraPos.x, 0, cameraPos.z),
+                const camera = document.querySelector('[camera]').object3D;
+                const dir = new THREE.Vector3();
+                dir.subVectors(
+                    new THREE.Vector3(camera.position.x, 0, camera.position.z),
                     new THREE.Vector3(position.x, 0, position.z)
-                    ).normalize();
+                ).normalize();
                 
-                const angle = Math.atan2(direction.x, direction.z);
-                    this.standModel.setAttribute('rotation', {
-                        x: 0,
+                const angle = Math.atan2(dir.x, dir.z);
+                standModel.setAttribute('rotation', {
+                    x: 0,
                     y: THREE.MathUtils.radToDeg(angle),
-                        z: 0
-                    });
-                    
+                    z: 0
+                });
+                
                 // Create WebXR anchor if available
-                if (this.usingWebXR && this.xrSession && 'createAnchor' in this.xrSession) {
+                if (usingWebXR && xrSession && 'createAnchor' in xrSession) {
                     try {
                         const hitPose = new XRRigidTransform(
                             new DOMPoint(position.x, position.y, position.z),
                             {x: 0, y: 0, z: 0, w: 1}
                         );
                         
-                        this.xrSession.createAnchor(hitPose, this.xrRefSpace)
+                        xrSession.createAnchor(hitPose, xrRefSpace)
                             .then(anchor => {
-                                console.log("Created WebXR spatial anchor for robust tracking");
+                                console.log('Created WebXR spatial anchor');
                                 
-                                // Track anchor position
-                                this.xrSession.addEventListener('frame', (e) => {
-                                    if (this.modelPlaced) {
+                                xrSession.addEventListener('frame', (e) => {
+                                    if (modelPlaced) {
                                         const frame = e.frame;
-                                        const anchorPose = frame.getPose(anchor.anchorSpace, this.xrRefSpace);
+                                        const anchorPose = frame.getPose(anchor.anchorSpace, xrRefSpace);
                                         
                                         if (anchorPose) {
                                             const {position} = anchorPose.transform;
-                                            this.modelAnchor.setAttribute('position', {
+                                            modelAnchor.setAttribute('position', {
                                                 x: position.x,
                                                 y: position.y,
                                                 z: position.z
@@ -804,87 +653,78 @@
                                     }
                                 });
                             })
-                            .catch(err => {
-                                console.warn("Failed to create anchor:", err);
+                            .catch(error => {
+                                console.warn('Failed to create anchor:', error);
                             });
-                    } catch (err) {
-                        console.warn("Error creating anchor:", err);
+                    } catch (error) {
+                        console.warn('Error creating anchor:', error);
                     }
                 }
                 
                 // Show model
-                    this.standModel.setAttribute('visible', true);
-                    
-                // Update UI
-                document.getElementById('tapIndicator').classList.add('hidden');
-                document.getElementById('footerText').classList.remove('hidden');
-                this.placementIndicator.style.display = 'none';
-                this.arStatus.style.display = 'none';
-                this.webxrNotice.style.display = 'none';
+                standModel.setAttribute('visible', true);
                 
-                // Clean up surface points
-                this.surfacePoints.forEach(point => {
+                // Update UI
+                tapIndicator.classList.add('hidden');
+                document.getElementById('footerText').classList.remove('hidden');
+                placementIndicator.style.display = 'none';
+                arStatus.style.display = 'none';
+                webxrNotice.style.display = 'none';
+                
+                // Clean up placement points
+                placementPoints.forEach(point => {
                     if (document.body.contains(point)) {
                         document.body.removeChild(point);
                     }
                 });
-                this.surfacePoints = [];
+                placementPoints = [];
                 
-                this.modelPlaced = true;
-                console.log('Model placed at position:', position.x, position.y, position.z);
-                
-                // Stop AR.js interval if running
-                if (this.arjsInterval) {
-                    clearInterval(this.arjsInterval);
-                }
-            },
-            
-            onModelClick: function(event) {
-                if (!this.modelPlaced) return;
-                
-                // Prevent default
-                if (event.preventDefault) event.preventDefault();
-                
-                // Open Instagram link
-                window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
-                console.log('Opening Instagram link');
+                modelPlaced = true;
             }
-        });
-        
-        // Main app initialization - keep this simple
-        document.addEventListener('DOMContentLoaded', function() {
-            const startScreen = document.getElementById('startScreen');
-            const loadingMessage = document.getElementById('loadingMessage');
-            const startButton = document.getElementById('startButton');
-            const arScene = document.getElementById('arScene');
             
-            // Hide AR scene initially
-            arScene.style.display = 'none';
+            // Handle model click
+            function onModelClick() {
+                if (!modelPlaced) return;
+                window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
+            }
             
-            // Start AR button event listeners
+            // Start AR experience
+            function startAR() {
+                loadingMessage.style.display = 'block';
+                startScreen.classList.add('hidden');
+                
+                // Show AR scene
+                arScene.style.display = 'block';
+                arOverlay.classList.remove('hidden');
+                tapIndicator.classList.remove('hidden');
+                
+                // Try to start WebXR
+                startWebXR();
+                
+                // Hide loading message after a delay
+                setTimeout(function() {
+                    loadingMessage.style.display = 'none';
+                }, 3000);
+            }
+            
+            // Set up event listeners
             startButton.addEventListener('click', startAR);
             startButton.addEventListener('touchend', function(e) {
                 e.preventDefault();
                 startAR();
             });
             
-            function startAR() {
-                console.log("🚀 Start AR button clicked");
-                
-                // Show loading first
-                loadingMessage.style.display = 'block';
-                startScreen.classList.add('hidden');
-                
-                // Then show AR scene (this triggers initialization)
-                arScene.style.display = 'block';
-                arOverlay.classList.remove('hidden');
-                
-                // Hide loading message after a delay
-                setTimeout(function() {
-                    loadingMessage.style.display = 'none';
-                    console.log("✅ AR experience fully initialized");
-                }, 2000);
-            }
+            arOverlay.addEventListener('click', placeModel);
+            arOverlay.addEventListener('touchend', function(e) {
+                e.preventDefault();
+                placeModel(e);
+            });
+            
+            standModel.addEventListener('click', onModelClick);
+            standModel.addEventListener('touchend', function(e) {
+                e.preventDefault();
+                onModelClick();
+            });
         });
     </script>
 </body>
