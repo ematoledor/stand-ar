@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>AR Coparmex</title>
     <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
-    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar-nft.js"></script>
     <script src="https://raw.githack.com/donmccurdy/aframe-extras/master/dist/aframe-extras.min.js"></script>
     <style>
         body {
@@ -56,21 +56,6 @@
             max-width: 80%;
             text-align: center;
         }
-        .action-button {
-            position: fixed;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            padding: 12px 24px;
-            border: none;
-            border-radius: 25px;
-            font-size: 18px;
-            cursor: pointer;
-            color: white;
-            background-color: #4CAF50;
-            z-index: 1000;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-        }
         .arjs-loader {
             height: 100%;
             width: 100%;
@@ -104,40 +89,178 @@
     </div>
 
     <!-- AR Status -->
-    <div id="statusMessage" class="status-message hidden">Apunta tu cámara al suelo...</div>
-
-    <!-- Action Button -->
-    <button id="actionButton" class="action-button hidden">Colocar Modelo Aquí</button>
+    <div id="statusMessage" class="status-message hidden">Buscando el suelo...</div>
 
     <!-- AR Scene (initially hidden) -->
     <a-scene 
         id="arScene"
         embedded
         vr-mode-ui="enabled: false"
-        arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
-        renderer="logarithmicDepthBuffer: true; precision: medium;"
+        arjs="trackingMethod: best; sourceType: webcam; debugUIEnabled: false;"
+        renderer="logarithmicDepthBuffer: true; precision: medium; antialias: true;"
         style="display: none;">
         
         <a-assets>
             <a-asset-item id="stand-model" src="stand-1.glb"></a-asset-item>
         </a-assets>
-        
-        <!-- Invisible plane marker for floor detection -->
-        <a-entity id="model-container">
-            <a-entity
+
+        <!-- Anchor point for the model -->
+        <a-entity id="floorAnchor">
+            <!-- We'll use this to position objects on the detected floor -->
+            <a-entity 
                 id="stand-model"
                 gltf-model="#stand-model"
                 position="0 0 0"
                 scale="1 1 1"
                 rotation="0 0 0"
-                visible="false">
+                visible="false"
+                class="clickable">
             </a-entity>
         </a-entity>
-        
-        <a-entity camera></a-entity>
-    </a-scene>
 
+        <!-- Experimental ground plane detection -->
+        <a-entity
+            id="groundPlane"
+            minDistance="0.1"
+            maxDistance="8"
+            groundColor="transparent"
+            arjs-plane-detection>
+        </a-entity>
+        
+        <a-entity camera look-controls></a-entity>
+    </a-scene>
+    
     <script>
+        // Implementing the experimental ground plane detection
+        AFRAME.registerComponent('arjs-plane-detection', {
+            schema: {
+                groundColor: {default: '#fff'},
+                minDistance: {default: 0.5},
+                maxDistance: {default: 10}
+            },
+            
+            init: function() {
+                this.raycaster = new THREE.Raycaster();
+                this.camera = document.querySelector('a-entity[camera]').object3D;
+                this.groundModel = document.querySelector('#stand-model');
+                this.floorAnchor = document.querySelector('#floorAnchor').object3D;
+                this.statusMessage = document.querySelector('#statusMessage');
+                this.isPlaced = false;
+                
+                // Create a tracking plane to detect ground
+                const geometry = new THREE.PlaneGeometry(100, 100);
+                const material = new THREE.MeshBasicMaterial({
+                    color: this.data.groundColor,
+                    transparent: true,
+                    opacity: 0.0
+                });
+                
+                this.plane = new THREE.Mesh(geometry, material);
+                this.plane.rotation.x = -Math.PI / 2; // Make it horizontal
+                this.plane.position.y = 0; // At ground level
+                this.el.setObject3D('plane', this.plane);
+                
+                // Listen for tap events to place model
+                document.addEventListener('click', this.onClick.bind(this));
+                document.addEventListener('touchend', this.onClick.bind(this));
+                
+                // Set up regular checking for ground
+                this.checkInterval = setInterval(this.checkGround.bind(this), 200);
+            },
+            
+            checkGround: function() {
+                if (this.isPlaced) {
+                    clearInterval(this.checkInterval);
+                    return;
+                }
+                
+                // Raycast from camera to find floor
+                const direction = new THREE.Vector3(0, -1, 0); // Down direction
+                this.raycaster.set(
+                    this.camera.position, 
+                    direction.normalize()
+                );
+                
+                const intersects = this.raycaster.intersectObject(this.plane);
+                
+                if (intersects.length > 0) {
+                    const hit = intersects[0];
+                    const distance = hit.distance;
+                    
+                    // If within valid range, we found the floor
+                    if (distance >= this.data.minDistance && distance <= this.data.maxDistance) {
+                        this.statusMessage.textContent = "Piso detectado - Toca para colocar el modelo";
+                    } else {
+                        this.statusMessage.textContent = "Buscando el suelo...";
+                    }
+                } else {
+                    this.statusMessage.textContent = "Apunta la cámara hacia el suelo";
+                }
+            },
+            
+            onClick: function(e) {
+                if (this.isPlaced) return;
+                
+                // Raycast from camera to find floor
+                const direction = new THREE.Vector3(0, -1, 0);
+                this.raycaster.set(
+                    this.camera.position, 
+                    direction.normalize()
+                );
+                
+                const intersects = this.raycaster.intersectObject(this.plane);
+                
+                if (intersects.length > 0) {
+                    const hit = intersects[0];
+                    const distance = hit.distance;
+                    
+                    // Place model if within valid range
+                    if (distance >= this.data.minDistance && distance <= this.data.maxDistance) {
+                        // Set model position at hit point
+                        const hitPoint = hit.point;
+                        this.floorAnchor.position.set(hitPoint.x, 0, hitPoint.z);
+                        
+                        // Show model
+                        this.groundModel.setAttribute('visible', true);
+                        this.statusMessage.textContent = "Toca el modelo para visitar Instagram";
+                        this.isPlaced = true;
+                        
+                        // Add click handler to model
+                        this.groundModel.addEventListener('click', () => {
+                            window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
+                        });
+                    }
+                }
+            },
+            
+            // Fallback placement if detection fails
+            placeModelAnyway: function() {
+                if (this.isPlaced) return;
+                
+                // Place in front of camera
+                const cameraPosition = this.camera.position;
+                const cameraDirection = new THREE.Vector3(0, 0, -1);
+                cameraDirection.applyQuaternion(this.camera.quaternion);
+                cameraDirection.multiplyScalar(2); // 2 meters in front
+                
+                const targetPosition = new THREE.Vector3(
+                    cameraPosition.x + cameraDirection.x,
+                    0, // On the ground
+                    cameraPosition.z + cameraDirection.z
+                );
+                
+                this.floorAnchor.position.copy(targetPosition);
+                this.groundModel.setAttribute('visible', true);
+                this.statusMessage.textContent = "Toca el modelo para visitar Instagram";
+                this.isPlaced = true;
+                
+                // Add click handler to model
+                this.groundModel.addEventListener('click', () => {
+                    window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
+                });
+            }
+        });
+        
         document.addEventListener('DOMContentLoaded', function() {
             // Elements
             const startScreen = document.getElementById('startScreen');
@@ -145,27 +268,6 @@
             const arScene = document.getElementById('arScene');
             const arLoader = document.getElementById('arLoader');
             const statusMessage = document.getElementById('statusMessage');
-            const actionButton = document.getElementById('actionButton');
-            const modelContainer = document.getElementById('model-container');
-            const standModel = document.getElementById('stand-model');
-            
-            // State
-            let arActive = false;
-            let modelPlaced = false;
-            
-            // Handle model visibility and interaction
-            function showModel() {
-                if (modelPlaced) return;
-                
-                standModel.setAttribute('visible', true);
-                statusMessage.textContent = 'Toca el modelo para visitar Instagram';
-                modelPlaced = true;
-                
-                // Add click handler to model
-                standModel.addEventListener('click', () => {
-                    window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
-                });
-            }
             
             // Start AR experience
             function startAR() {
@@ -179,19 +281,10 @@
                 // Prepare scene
                 arScene.style.display = 'block';
                 
-                // Set up action button for manual placement
-                actionButton.classList.remove('hidden');
-                actionButton.addEventListener('click', () => {
-                    showModel();
-                    actionButton.classList.add('hidden');
-                });
-                
                 // Handle when AR.js is ready
                 arScene.addEventListener('loaded', () => {
                     setTimeout(() => {
                         arLoader.classList.add('hidden');
-                        arActive = true;
-                        statusMessage.textContent = 'Toca el botón para colocar el modelo';
                     }, 1000);
                 });
                 
@@ -203,37 +296,27 @@
                     statusMessage.textContent = 'Asegúrate de permitir el acceso a la cámara';
                 }, 5000);
                 
-                // For devices with orientation - place model based on orientation
-                window.addEventListener('deviceorientation', (e) => {
-                    if (!arActive || modelPlaced) return;
-                    
-                    // If device is pointing down (beta between 50-80 degrees), show placement button
-                    if (e.beta >= 50 && e.beta <= 80) {
-                        statusMessage.textContent = 'Superficie detectada - Toca para colocar';
-                        actionButton.textContent = 'Colocar Aquí';
-                    } else {
-                        statusMessage.textContent = 'Apunta la cámara hacia el suelo';
-                        actionButton.textContent = 'Colocar Modelo Aquí';
+                // Add fallback placement after 15 seconds if ground detection fails
+                setTimeout(() => {
+                    const groundPlane = document.querySelector('#groundPlane').components['arjs-plane-detection'];
+                    if (!groundPlane.isPlaced) {
+                        statusMessage.textContent = 'Toca en cualquier lugar para colocar el modelo';
+                        document.addEventListener('click', function fallbackListener() {
+                            groundPlane.placeModelAnyway();
+                            document.removeEventListener('click', fallbackListener);
+                        });
                     }
-                });
+                }, 15000);
                 
                 // Monitor model loading
-                standModel.addEventListener('model-loaded', () => {
+                document.querySelector('#stand-model').addEventListener('model-loaded', () => {
                     console.log('Modelo 3D cargado correctamente');
                 });
                 
-                standModel.addEventListener('model-error', (e) => {
+                document.querySelector('#stand-model').addEventListener('model-error', (e) => {
                     console.error('Error al cargar modelo 3D:', e);
                     statusMessage.textContent = 'Error al cargar el modelo 3D';
                 });
-                
-                // Fallback placement after 10 seconds if nothing happens
-                setTimeout(() => {
-                    if (!modelPlaced) {
-                        actionButton.textContent = 'Mostrar Modelo Ahora';
-                        actionButton.style.backgroundColor = '#ff9800';
-                    }
-                }, 10000);
             }
             
             // Set up event listeners
@@ -241,25 +324,6 @@
             startButton.addEventListener('touchend', (e) => {
                 e.preventDefault();
                 startAR();
-            });
-            
-            // Backup in case camera doesn't initialize properly
-            document.addEventListener('click', () => {
-                if (arActive && !modelPlaced && !document.hidden) {
-                    // Double check if AR.js camera is working
-                    const video = document.querySelector('.a-canvas');
-                    if (video && !video.getAttribute('data-checked')) {
-                        video.setAttribute('data-checked', 'true');
-                        
-                        // If we're having camera issues after 3 seconds, show alternative button
-                        setTimeout(() => {
-                            if (!modelPlaced) {
-                                actionButton.textContent = 'Mostrar Modelo Sin AR';
-                                actionButton.style.backgroundColor = '#f44336';
-                            }
-                        }, 3000);
-                    }
-                }
             });
         });
     </script>
