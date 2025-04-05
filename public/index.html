@@ -173,7 +173,7 @@
     <div id="startScreen" class="ui-container">
         <h1>Experiencia Coparmex</h1>
         <p class="instructions">Esta experiencia AR te permite ver un modelo 3D del stand de Coparmex CDMX. Apunta al suelo para colocarlo y tócalo para registrarte.</p>
-        <button id="startAR" class="button start-button">Iniciar Experiencia AR</button>
+        <button id="startButton" class="button start-button">Iniciar Experiencia AR</button>
     </div>
 
     <!-- Floor detection UI -->
@@ -187,13 +187,13 @@
     <div class="footer-text">Toca el modelo para registrarte</div>
     
     <a-scene 
+        id="arScene"
         embedded
-        arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best; detectionMode: mono_and_matrix; matrixCodeType: 3x3; maxDetectionRate: 30; canvasWidth: 1280; canvasHeight: 960;"
+        arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best; detectionMode: mono_and_matrix; matrixCodeType: 3x3; maxDetectionRate: 30;"
         vr-mode-ui="enabled: false"
         renderer="logarithmicDepthBuffer: true; precision: medium; antialias: true;"
         raycaster="objects: .collidable; far: 100"
         cursor="rayOrigin: mouse"
-        ar-hit-test
         id="scene">
         
         <a-assets>
@@ -218,75 +218,18 @@
             position="0 -100 0"
             scale="1 1 1"
             rotation="0 0 0"
-            class="clickable"
+            class="clickable collidable"
             visible="false">
         </a-entity>
 
-        <a-entity camera look-controls position="0 1.6 0" raycaster></a-entity>
+        <a-entity camera look-controls position="0 1.6 0"></a-entity>
     </a-scene>
 
     <script>
-        // AR Hit-Testing component to improve floor anchoring
-        AFRAME.registerComponent('ar-hit-test', {
-            init: function() {
-                this.xrHitTestSource = null;
-                this.viewerSpace = null;
-                this.refSpace = null;
-
-                this.el.sceneEl.renderer.xr.addEventListener('sessionend', (ev) => {
-                    this.xrHitTestSource = null;
-                });
-
-                this.el.sceneEl.renderer.xr.addEventListener('sessionstart', (ev) => {
-                    let session = this.el.sceneEl.renderer.xr.getSession();
-                    
-                    let refSpaceType = 'local-floor';
-                    session.requestReferenceSpace(refSpaceType)
-                        .then((refSpace) => {
-                            this.refSpace = refSpace;
-                            return session.requestReferenceSpace('viewer');
-                        })
-                        .then((viewerSpace) => {
-                            this.viewerSpace = viewerSpace;
-                            return session.requestHitTestSource({space: this.viewerSpace});
-                        })
-                        .then((hitTestSource) => {
-                            this.xrHitTestSource = hitTestSource;
-                        });
-                });
-            },
-            
-            tick: function() {
-                if (this.el.sceneEl.is('ar-mode') && this.xrHitTestSource && this.viewerSpace && this.refSpace) {
-                    let frame = this.el.sceneEl.frame;
-                    let xrViewerPose = frame.getViewerPose(this.refSpace);
-                    
-                    if (xrViewerPose) {
-                        let hitTestResults = frame.getHitTestResults(this.xrHitTestSource);
-                        
-                        if (hitTestResults.length > 0) {
-                            let pose = hitTestResults[0].getPose(this.refSpace);
-                            
-                            // Update the floor plane position to match the hit test
-                            let floorPlane = document.getElementById('floor-plane');
-                            if (floorPlane) {
-                                floorPlane.setAttribute('position', {
-                                    x: pose.transform.position.x,
-                                    y: pose.transform.position.y,
-                                    z: pose.transform.position.z
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
         // Floor detection component
         AFRAME.registerComponent('floor-detector', {
             init: function() {
                 this.raycaster = new THREE.Raycaster();
-                this.mouse = new THREE.Vector2();
                 this.isFloorDetected = false;
                 this.placedModel = false;
                 
@@ -303,8 +246,9 @@
                 this.detectionRing.style.display = 'block';
                 this.detectionRing.classList.add('pulsate');
                 
-                // Listen for raycaster-intersection events
-                this.el.addEventListener('click', this.handleTap.bind(this));
+                // Listen for clicks
+                document.addEventListener('click', this.handleTap.bind(this));
+                document.addEventListener('touchend', this.handleTap.bind(this));
                 
                 // Set up continuous floor detection
                 this.detectFloorInterval = setInterval(this.detectFloor.bind(this), 100);
@@ -316,90 +260,69 @@
                     return;
                 }
                 
-                // Get camera direction
-                const cameraPosition = this.camera.object3D.position;
-                const cameraDirection = new THREE.Vector3(0, 0, -1);
-                cameraDirection.applyQuaternion(this.camera.object3D.quaternion);
-                
-                // Set up raycaster
-                this.raycaster.set(cameraPosition, cameraDirection);
-                
-                // Check for intersections with the floor plane
-                const floorObject = this.floor.object3D;
-                const intersects = this.raycaster.intersectObject(floorObject, true);
-                
-                if (intersects.length > 0) {
-                    // Floor detected
-                    if (!this.isFloorDetected) {
-                        this.detectionRing.classList.add('floor-detected');
-                        this.isFloorDetected = true;
-                        this.tapIndicator.textContent = '¡Suelo detectado! Toca para colocar el modelo';
-                    }
-                } else {
-                    // Floor not detected
-                    if (this.isFloorDetected) {
-                        this.detectionRing.classList.remove('floor-detected');
-                        this.isFloorDetected = false;
-                        this.tapIndicator.textContent = 'Apunta al suelo y toca para colocar el modelo';
-                    }
+                // Always consider floor detected with AR.js
+                if (!this.isFloorDetected) {
+                    this.detectionRing.classList.add('floor-detected');
+                    this.isFloorDetected = true;
+                    this.tapIndicator.textContent = 'Toca para colocar el modelo';
                 }
             },
             
             handleTap: function(event) {
-                if (this.placedModel || !this.isFloorDetected) return;
+                if (this.placedModel) {
+                    // Check if the model was tapped
+                    const standRect = this.standModel.object3D.el.getBoundingClientRect();
+                    const x = event.clientX || (event.changedTouches && event.changedTouches[0].clientX);
+                    const y = event.clientY || (event.changedTouches && event.changedTouches[0].clientY);
+                    
+                    if (x >= standRect.left && x <= standRect.right && 
+                        y >= standRect.top && y <= standRect.bottom) {
+                        window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
+                    }
+                    return;
+                }
                 
-                // Get camera direction
+                // Hide UI elements
+                this.crosshair.style.display = 'none';
+                this.detectionRing.style.display = 'none';
+                this.tapIndicator.style.display = 'none';
+                this.footerText.style.display = 'block';
+                
+                // Position the model in front of the camera
                 const cameraPosition = this.camera.object3D.position;
                 const cameraDirection = new THREE.Vector3(0, 0, -1);
                 cameraDirection.applyQuaternion(this.camera.object3D.quaternion);
+                cameraDirection.multiplyScalar(3); // Place 3 meters in front
                 
-                // Set up raycaster
-                this.raycaster.set(cameraPosition, cameraDirection);
+                const modelPosition = {
+                    x: cameraPosition.x + cameraDirection.x,
+                    y: 0, // Keep on floor
+                    z: cameraPosition.z + cameraDirection.z
+                };
                 
-                // Check for intersections with the floor plane
-                const floorObject = this.floor.object3D;
-                const intersects = this.raycaster.intersectObject(floorObject, true);
+                // Position the model
+                this.standModel.setAttribute('position', modelPosition);
                 
-                if (intersects.length > 0) {
-                    // Use the exact hit point instead of calculating a fixed distance
-                    const hitPoint = intersects[0].point;
-                    
-                    // Hide UI elements
-                    this.crosshair.style.display = 'none';
-                    this.detectionRing.style.display = 'none';
-                    this.tapIndicator.style.display = 'none';
-                    this.footerText.style.display = 'block';
-                    
-                    // Position the model at the exact hit point
-                    this.standModel.setAttribute('position', {
-                        x: hitPoint.x,
-                        y: 0,  // Keep y at 0 to stay on floor
-                        z: hitPoint.z
-                    });
-                    
-                    // Rotate to face the camera
-                    const lookAtCamera = new THREE.Vector3().subVectors(
-                        new THREE.Vector3(cameraPosition.x, 0, cameraPosition.z), 
-                        new THREE.Vector3(hitPoint.x, 0, hitPoint.z)
-                    ).normalize();
-                    const angleY = Math.atan2(lookAtCamera.x, lookAtCamera.z);
-                    this.standModel.setAttribute('rotation', {
-                        x: 0,
-                        y: THREE.MathUtils.radToDeg(angleY),
-                        z: 0
-                    });
-                    
-                    // Set scale directly
-                    this.standModel.setAttribute('scale', '1 1 1');
-                    
-                    // Make the model visible
-                    this.standModel.setAttribute('visible', true);
-                    
-                    console.log('Model placed at exact hit point:', hitPoint.x, 0, hitPoint.z);
-                    
-                    this.placedModel = true;
-                    clearInterval(this.detectFloorInterval);
-                }
+                // Rotate to face the camera
+                const lookAtCamera = new THREE.Vector3().subVectors(
+                    new THREE.Vector3(cameraPosition.x, 0, cameraPosition.z), 
+                    new THREE.Vector3(modelPosition.x, 0, modelPosition.z)
+                ).normalize();
+                const angleY = Math.atan2(lookAtCamera.x, lookAtCamera.z);
+                this.standModel.setAttribute('rotation', {
+                    x: 0,
+                    y: THREE.MathUtils.radToDeg(angleY),
+                    z: 0
+                });
+                
+                // Set scale and visibility
+                this.standModel.setAttribute('scale', '1 1 1');
+                this.standModel.setAttribute('visible', true);
+                
+                console.log('Model placed at position:', modelPosition.x, modelPosition.y, modelPosition.z);
+                
+                this.placedModel = true;
+                clearInterval(this.detectFloorInterval);
             }
         });
 
@@ -407,90 +330,44 @@
         document.addEventListener('DOMContentLoaded', function() {
             // Get UI elements
             const startScreen = document.getElementById('startScreen');
-            const scene = document.getElementById('scene');
             const loadingMessage = document.getElementById('loadingMessage');
-            const errorMessage = document.getElementById('errorMessage');
-            const startARButton = document.getElementById('startAR');
-            const tapIndicator = document.getElementById('tapIndicator');
-            const standModel = document.getElementById('stand');
+            const startButton = document.getElementById('startButton');
+            const arScene = document.getElementById('arScene');
             
-            // Make sure iOS doesn't block event
-            startARButton.addEventListener('touchend', function(e) {
-                e.preventDefault();
-                startAR();
-            });
+            // Initially hide AR scene
+            arScene.style.display = 'none';
             
-            // Start AR button
-            startARButton.addEventListener('click', function(e) {
+            // Start AR button event listeners
+            startButton.addEventListener('click', startAR);
+            startButton.addEventListener('touchend', function(e) {
                 e.preventDefault();
                 startAR();
             });
             
             function startAR() {
-                startScreen.classList.add('hidden');
+                console.log("Start AR button clicked");
+                // Hide start screen
+                startScreen.style.display = 'none';
+                // Show loading message
                 loadingMessage.style.display = 'block';
+                // Show AR scene
+                arScene.style.display = 'block';
                 
-                // For iOS devices: try to start AR without camera permission check first
-                if (navigator.userAgent.match(/iPhone|iPad|iPod/i)) {
-                    startARExperience();
-                    return;
-                }
-                
-                // Request camera permissions for Android and other devices
-                navigator.mediaDevices.getUserMedia({ video: true })
-                    .then(function(stream) {
-                        // Camera access granted
-                        stream.getTracks().forEach(track => track.stop());
-                        startARExperience();
-                    })
-                    .catch(function(err) {
-                        // Camera access denied
-                        errorMessage.style.display = 'block';
-                        loadingMessage.style.display = 'none';
-                        console.error("Camera error:", err);
-                    });
-            }
-            
-            function startARExperience() {
-                // Show tap indicator after a delay to allow AR to initialize
+                // Initialize AR after a short delay
                 setTimeout(function() {
+                    // Hide loading message after AR scene is ready
                     loadingMessage.style.display = 'none';
-                    tapIndicator.style.display = 'block';
                     
-                    // Add floor detector component to scene
-                    scene.setAttribute('floor-detector', '');
+                    // Initialize floor detector for model placement
+                    document.querySelector('a-scene').setAttribute('floor-detector', '');
                     
-                    // Ensure our AR hit test is running
-                    if (!scene.hasAttribute('ar-hit-test')) {
-                        scene.setAttribute('ar-hit-test', '');
-                    }
+                    console.log("AR experience started");
                 }, 2000);
             }
             
             // When assets are loaded
             document.querySelector('a-assets').addEventListener('loaded', function() {
                 console.log("Assets loaded");
-            });
-            
-            // Set up click event to open registration when model is clicked
-            standModel.addEventListener('click', function() {
-                if (standModel.getAttribute('visible') === true) {
-                    window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
-                }
-            });
-            
-            // Additional touch event for mobile
-            standModel.addEventListener('touchend', function(e) {
-                e.preventDefault();
-                if (standModel.getAttribute('visible') === true) {
-                    window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
-                }
-            });
-
-            // Handle camera permissions error
-            window.addEventListener('camera-error', function() {
-                errorMessage.style.display = 'block';
-                loadingMessage.style.display = 'none';
             });
         });
     </script>
