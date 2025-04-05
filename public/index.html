@@ -6,6 +6,7 @@
     <title>AR Coparmex</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
     <script src="https://raw.githack.com/donmccurdy/aframe-extras/master/dist/aframe-extras.min.js"></script>
+    <script src="https://unpkg.com/aframe-look-at-component@0.8.0/dist/aframe-look-at-component.min.js"></script>
     <style>
         body {
             margin: 0;
@@ -29,7 +30,7 @@
             padding: 20px;
         }
         .hidden {
-            display: none;
+            display: none !important;
         }
         .button {
             padding: 12px 24px;
@@ -59,6 +60,8 @@
             height: 40px;
             border: 2px solid rgba(76, 175, 80, 0.8);
             border-radius: 50%;
+            top: 50%;
+            left: 50%;
             transform: translate(-50%, -50%);
             pointer-events: none;
             z-index: 6;
@@ -100,17 +103,18 @@
     <!-- AR Scene -->
     <a-scene 
         id="arScene"
-        embedded
         vr-mode-ui="enabled: false"
+        embedded
         renderer="logarithmicDepthBuffer: true; precision: medium; antialias: true;"
-        cursor="rayOrigin: mouse"
         style="display: none;">
         
         <a-assets>
             <a-asset-item id="stand-model" src="stand-1.glb"></a-asset-item>
         </a-assets>
 
-        <a-entity id="model-anchor" position="0 -100 0">
+        <a-entity id="camera" camera position="0 1.6 0" look-controls="enabled: false"></a-entity>
+        
+        <a-entity id="model-anchor" position="0 0 -5">
             <a-entity
                 id="stand-model"
                 gltf-model="#stand-model"
@@ -121,11 +125,12 @@
                 class="clickable">
             </a-entity>
         </a-entity>
-
-        <a-entity camera look-controls position="0 0 0"></a-entity>
     </a-scene>
 
     <script>
+        // Check if running on mobile
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        
         document.addEventListener('DOMContentLoaded', function() {
             // Elements
             const startScreen = document.getElementById('startScreen');
@@ -140,103 +145,122 @@
             let xrSession = null;
             let xrHitTestSource = null;
             let xrRefSpace = null;
-            let xrViewerSpace = null;
             let lastHitPosition = null;
             let modelPlaced = false;
+            let hasPermissions = false;
+            
+            // Helper for error/fallback handling
+            function showErrorMessage(message) {
+                statusMessage.textContent = message;
+                statusMessage.classList.remove('hidden');
+                
+                // Show the model in a fixed position for devices that don't support AR
+                if (!modelPlaced) {
+                    modelAnchor.setAttribute('position', '0 0 -5');
+                    standModel.setAttribute('visible', true);
+                    standModel.setAttribute('look-at', '[camera]');
+                    modelPlaced = true;
+                }
+            }
             
             // Start AR experience
             function startAR() {
                 startScreen.classList.add('hidden');
-                statusMessage.classList.remove('hidden');
                 arScene.style.display = 'block';
+                statusMessage.classList.remove('hidden');
                 
                 // Check WebXR support
                 if (navigator.xr) {
+                    statusMessage.textContent = 'Verificando soporte AR...';
+                    
                     navigator.xr.isSessionSupported('immersive-ar')
                         .then(supported => {
                             if (!supported) {
-                                statusMessage.textContent = 'WebXR AR no soportado en este dispositivo';
+                                showErrorMessage('AR no soportado - Mostrando modelo en posición fija');
                                 return;
                             }
                             
-                            statusMessage.textContent = 'Iniciando WebXR...';
-                            
-                            const sessionInit = { 
-                                optionalFeatures: ['hit-test'] 
+                            const sessionInit = {
+                                requiredFeatures: ['hit-test'],
+                                optionalFeatures: ['dom-overlay'],
+                                domOverlay: { root: document.body }
                             };
+                            
+                            statusMessage.textContent = 'Iniciando AR...';
                             
                             navigator.xr.requestSession('immersive-ar', sessionInit)
                                 .then(session => {
                                     xrSession = session;
-                                    statusMessage.textContent = 'Buscando superficies...';
+                                    
+                                    // Handle session end
+                                    session.addEventListener('end', () => {
+                                        xrSession = null;
+                                        if (xrHitTestSource) {
+                                            xrHitTestSource.cancel();
+                                            xrHitTestSource = null;
+                                        }
+                                        startScreen.classList.remove('hidden');
+                                        arScene.style.display = 'none';
+                                        statusMessage.classList.add('hidden');
+                                    });
                                     
                                     // Set up WebXR
                                     initWebXRSession(session);
                                     
-                                    // Set up click handler for the entire view
-                                    window.addEventListener('click', placeModel);
-                                    window.addEventListener('touchend', (e) => {
-                                        e.preventDefault();
-                                        placeModel();
-                                    });
+                                    // Set up click handler
+                                    session.addEventListener('select', placeModel);
                                 })
                                 .catch(error => {
-                                    console.error('Error starting WebXR session:', error);
-                                    statusMessage.textContent = 'Error al iniciar WebXR';
+                                    console.error('Error starting AR session:', error);
+                                    showErrorMessage('Error al iniciar AR - Mostrando modelo en posición fija');
                                 });
                         });
                 } else {
-                    statusMessage.textContent = 'WebXR no está disponible en este navegador';
+                    showErrorMessage('WebXR no soportado - Mostrando modelo en posición fija');
                 }
             }
             
             // Initialize WebXR session
             function initWebXRSession(session) {
-                // Get WebGL context from A-Frame
-                const gl = arScene.renderer.getContext();
+                arScene.renderer.xr.setReferenceSpaceType('local');
+                arScene.renderer.xr.setSession(session);
                 
-                // Make WebGL context compatible with WebXR
-                gl.makeXRCompatible()
-                    .then(() => {
-                        // Set up rendering
-                        const xrLayer = new XRWebGLLayer(session, gl);
-                        session.updateRenderState({
-                            baseLayer: xrLayer
-                        });
+                session.requestReferenceSpace('local')
+                    .then(refSpace => {
+                        xrRefSpace = refSpace;
                         
-                        // Request reference spaces
-                        session.requestReferenceSpace('local-floor')
-                            .then(refSpace => {
-                                xrRefSpace = refSpace;
-                                return session.requestReferenceSpace('viewer');
-                            })
-                            .then(viewerSpace => {
-                                xrViewerSpace = viewerSpace;
-                                
-                                // Set up hit testing
-                                return session.requestHitTestSource({
-                                    space: viewerSpace
-                                });
-                            })
+                        statusMessage.textContent = 'Buscando superficies...';
+                        reticle.style.display = 'block';
+                        
+                        // Set up hit testing
+                        session.requestHitTestSource({ space: refSpace })
                             .then(hitTestSource => {
                                 xrHitTestSource = hitTestSource;
                                 
-                                // Start the rendering loop
+                                // Create animation loop
                                 session.requestAnimationFrame(onXRFrame);
+                            })
+                            .catch(error => {
+                                console.error('Error requesting hit test source:', error);
+                                showErrorMessage('Error al detectar superficies - Mostrando modelo en posición fija');
                             });
+                    })
+                    .catch(error => {
+                        console.error('Error requesting reference space:', error);
+                        showErrorMessage('Error de configuración AR - Mostrando modelo en posición fija');
                     });
             }
             
             // WebXR frame handler
             function onXRFrame(time, frame) {
                 const session = xrSession;
-                if (!session || modelPlaced) return;
+                if (!session) return;
                 
                 // Queue next frame
                 session.requestAnimationFrame(onXRFrame);
                 
-                // Skip if no hit test source
-                if (!xrHitTestSource) return;
+                // Skip hit testing if model is already placed or no hit test source
+                if (modelPlaced || !xrHitTestSource) return;
                 
                 // Get hit test results
                 const hitTestResults = frame.getHitTestResults(xrHitTestSource);
@@ -246,112 +270,83 @@
                     const pose = hit.getPose(xrRefSpace);
                     
                     if (pose) {
-                        const position = pose.transform.position;
-                        lastHitPosition = position;
-                        
-                        // Update UI
+                        lastHitPosition = pose.transform;
+                        // Update status message
                         statusMessage.textContent = 'Superficie detectada - Toca para colocar';
-                        
-                        // Project to screen and show reticle
-                        const coords = projectToScreen(position, frame);
-                        if (coords) {
-                            reticle.style.display = 'block';
-                            reticle.style.left = coords.x + 'px';
-                            reticle.style.top = coords.y + 'px';
-                        }
                     }
                 } else {
+                    lastHitPosition = null;
                     statusMessage.textContent = 'Buscando superficies...';
-                    reticle.style.display = 'none';
                 }
             }
             
-            // Project a 3D position to screen coordinates
-            function projectToScreen(point, frame) {
-                if (!xrSession || !frame) return null;
-                
-                const viewerPose = frame.getViewerPose(xrRefSpace);
-                if (!viewerPose) return null;
-                
-                const view = viewerPose.views[0];
-                const viewport = xrSession.renderState.baseLayer.getViewport(view);
-                
-                // Convert to Three.js Vector3
-                const vector = new THREE.Vector3(point.x, point.y, point.z);
-                
-                // Create projection matrix from view
-                const projMatrix = new THREE.Matrix4();
-                projMatrix.fromArray(view.projectionMatrix);
-                
-                // Create view matrix
-                const viewMatrix = new THREE.Matrix4();
-                viewMatrix.fromArray(view.transform.inverse.matrix);
-                
-                // Apply matrices
-                vector.applyMatrix4(viewMatrix);
-                vector.applyMatrix4(projMatrix);
-                
-                // Convert to screen space
-                return {
-                    x: (vector.x + 1) * viewport.width / 2,
-                    y: (-vector.y + 1) * viewport.height / 2
-                };
-            }
-            
             // Place model at hit position
-            function placeModel() {
-                if (modelPlaced || !lastHitPosition) return;
+            function placeModel(event) {
+                if (modelPlaced) return;
                 
-                // Use WebXR hit position
-                const position = {
-                    x: lastHitPosition.x,
-                    y: lastHitPosition.y,
-                    z: lastHitPosition.z
-                };
-                
-                // Position the model
-                modelAnchor.setAttribute('position', position);
-                
-                // Face the camera
-                const camera = document.querySelector('[camera]').object3D;
-                const dir = new THREE.Vector3();
-                dir.subVectors(
-                    new THREE.Vector3(camera.position.x, 0, camera.position.z),
-                    new THREE.Vector3(position.x, 0, position.z)
-                ).normalize();
-                
-                const angle = Math.atan2(dir.x, dir.z);
-                standModel.setAttribute('rotation', {
-                    x: 0,
-                    y: THREE.MathUtils.radToDeg(angle),
-                    z: 0
-                });
-                
-                // Show model
-                standModel.setAttribute('visible', true);
-                
-                // Update UI
-                statusMessage.textContent = 'Toca el modelo para registrarte';
-                reticle.style.display = 'none';
-                
-                modelPlaced = true;
-                
-                // Set up model click event
-                standModel.addEventListener('click', () => {
-                    window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
-                });
-                standModel.addEventListener('touchend', (e) => {
-                    e.preventDefault();
-                    window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
-                });
+                if (lastHitPosition) {
+                    // Use WebXR hit position
+                    const {position, orientation} = lastHitPosition;
+                    
+                    // Convert to A-Frame position format
+                    const pos = {
+                        x: position.x,
+                        y: position.y,
+                        z: position.z
+                    };
+                    
+                    // Set model position and rotation
+                    modelAnchor.setAttribute('position', pos);
+                    standModel.setAttribute('visible', true);
+                    
+                    // Update UI
+                    statusMessage.textContent = 'Toca el modelo para visitar Instagram';
+                    reticle.style.display = 'none';
+                    
+                    modelPlaced = true;
+                    
+                    // Add tap listener to model
+                    standModel.addEventListener('click', openInstagram);
+                    standModel.addEventListener('touchend', (e) => {
+                        e.preventDefault();
+                        openInstagram();
+                    });
+                } else if (!isMobile) {
+                    // Fallback for desktop testing
+                    modelAnchor.setAttribute('position', '0 0 -5');
+                    standModel.setAttribute('visible', true);
+                    standModel.setAttribute('look-at', '[camera]');
+                    
+                    statusMessage.textContent = 'Toca el modelo para visitar Instagram';
+                    reticle.style.display = 'none';
+                    
+                    modelPlaced = true;
+                    
+                    // Add click listener to model
+                    standModel.addEventListener('click', openInstagram);
+                }
             }
             
-            // Set up event listeners
+            // Open Instagram link
+            function openInstagram() {
+                window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
+            }
+            
+            // Set up UI event listeners
             startButton.addEventListener('click', startAR);
             startButton.addEventListener('touchend', (e) => {
                 e.preventDefault();
                 startAR();
             });
+            
+            // Fallback for desktop testing
+            if (!isMobile) {
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'p' && !modelPlaced) {
+                        placeModel();
+                    }
+                });
+            }
         });
     </script>
 </body>
