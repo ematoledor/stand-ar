@@ -54,27 +54,17 @@
             z-index: 1000;
             text-align: center;
         }
-        .info-button {
+        .action-buttons {
             position: fixed;
             bottom: 20px;
-            right: 20px;
-            width: 50px;
-            height: 50px;
-            border-radius: 50%;
-            background-color: #4CAF50;
-            color: white;
-            font-size: 24px;
+            width: 100%;
             display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
+            justify-content: space-between;
+            padding: 0 20px;
+            box-sizing: border-box;
             z-index: 1000;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
         }
-        .marker-button {
-            position: fixed;
-            bottom: 20px;
-            left: 20px;
+        .control-button {
             width: 50px;
             height: 50px;
             border-radius: 50%;
@@ -85,7 +75,6 @@
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            z-index: 1000;
             box-shadow: 0 2px 5px rgba(0,0,0,0.3);
         }
         .loading-overlay {
@@ -192,11 +181,11 @@
     <!-- Status Message -->
     <div id="statusMessage" class="status-message hidden">Iniciando AR...</div>
     
-    <!-- Info Button -->
-    <div id="infoButton" class="info-button hidden">i</div>
-
-    <!-- Marker Button -->
-    <div id="markerButton" class="marker-button hidden">M</div>
+    <!-- Action Buttons -->
+    <div id="actionButtons" class="action-buttons hidden">
+        <div id="markerButton" class="control-button">M</div>
+        <div id="infoButton" class="control-button">i</div>
+    </div>
 
     <!-- Marker Modal -->
     <div id="markerModal" class="modal hidden">
@@ -204,7 +193,7 @@
         <div class="modal-content">
             <h2>Marcador HIRO</h2>
             <p>Imprime este marcador o muéstralo en otra pantalla para mejorar la experiencia AR.</p>
-            <img id="hiroMarker" src="data:image/png;base64,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" alt="HIRO Marker">
+            <img id="hiroMarker" src="data:image/png;base64,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" alt="HIRO Marker">
             <button id="downloadMarker" class="download-button">Descargar Marcador</button>
             <p>Para usar esta experiencia AR:</p>
             <ol style="text-align: left;">
@@ -216,51 +205,34 @@
         </div>
     </div>
 
-    <!-- A-Frame Scene (hidden initially) -->
-    <a-scene id="arScene" embedded arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;" renderer="logarithmicDepthBuffer: true; antialias: true" vr-mode-ui="enabled: false" gesture-detector visible="false">
+    <!-- A-Frame Scene -->
+    <a-scene id="arScene" embedded arjs="sourceType: webcam; debugUIEnabled: false;" renderer="logarithmicDepthBuffer: true; antialias: true" vr-mode-ui="enabled: false" visible="false">
+        <!-- Define a light to make the model visible -->
+        <a-entity light="type: ambient; color: #FFF; intensity: 0.6"></a-entity>
+        <a-entity light="type: directional; color: #FFF; intensity: 0.8" position="-1 1 1"></a-entity>
         
-        <!-- Use a simple marker-based positioning -->
-        <a-entity id="modelContainer">
-            <!-- Use a custom marker pattern for better stability -->
-            <a-marker type="pattern" preset="hiro" id="mainMarker">
-                <a-entity
-                    id="model"
-                    gltf-model="stand-1.glb"
-                    position="0 0 0"
-                    scale="0.5 0.5 0.5"
-                    rotation="0 0 0"
-                    animation="property: rotation; to: 0 360 0; loop: true; dur: 30000; easing: linear"
-                    class="clickable"
-                    gesture-handler>
-                </a-entity>
-            </a-marker>
+        <!-- Camera with fixed 3D model -->
+        <a-entity camera look-controls>
+            <a-entity
+                id="fixedModel"
+                gltf-model="stand-1.glb"
+                position="0 0 -3" 
+                scale="0.5 0.5 0.5"
+                rotation="0 0 0"
+                animation="property: rotation; to: 0 360 0; loop: true; dur: 30000; easing: linear"
+                clickable>
+            </a-entity>
         </a-entity>
-
-        <!-- Fixed camera entity -->
-        <a-entity camera></a-entity>
     </a-scene>
 </body>
 
 <script>
-    // Custom component for handling gestures
-    AFRAME.registerComponent('gesture-handler', {
-        schema: {
-            enabled: { default: true }
-        },
+    // Register clickable component to handle interaction
+    AFRAME.registerComponent('clickable', {
         init: function() {
             this.el.addEventListener('click', () => {
-                if (this.data.enabled) {
-                    window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
-                }
-            });
-        }
-    });
-
-    // Detect gestures
-    AFRAME.registerComponent('gesture-detector', {
-        init: function() {
-            this.el.addEventListener('click', evt => {
-                this.el.emit('click', { target: evt.detail.target });
+                console.log('Model clicked!');
+                window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
             });
         }
     });
@@ -276,9 +248,10 @@
         const downloadMarker = document.getElementById('downloadMarker');
         const markerButton = document.getElementById('markerButton');
         const infoButton = document.getElementById('infoButton');
+        const actionButtons = document.getElementById('actionButtons');
         
-        // Set up click handlers with direct onclick property
-        startButton.onclick = function() {
+        // Set up click handlers
+        startButton.addEventListener('click', function() {
             console.log("Start AR clicked");
             document.getElementById('startScreen').classList.add('hidden');
             document.getElementById('loadingOverlay').classList.remove('hidden');
@@ -291,28 +264,22 @@
             setTimeout(function() {
                 document.getElementById('loadingOverlay').classList.add('hidden');
                 document.getElementById('statusMessage').classList.remove('hidden');
-                document.getElementById('statusMessage').textContent = "Busca el marcador HIRO";
-                document.getElementById('infoButton').classList.remove('hidden');
-                document.getElementById('markerButton').classList.remove('hidden');
-                
-                // After a few seconds, update the status message
-                setTimeout(function() {
-                    document.getElementById('statusMessage').textContent = "Toca el modelo para visitar Instagram";
-                }, 5000);
+                actionButtons.classList.remove('hidden');
+                document.getElementById('statusMessage').textContent = "Toca el modelo para visitar Instagram";
             }, 3000);
-        };
+        });
         
-        showMarkerButton.onclick = function() {
+        showMarkerButton.addEventListener('click', function() {
             console.log("Show marker clicked");
             document.getElementById('markerModal').classList.remove('hidden');
-        };
+        });
         
-        closeMarkerModal.onclick = function() {
+        closeMarkerModal.addEventListener('click', function() {
             console.log("Close marker clicked");
             document.getElementById('markerModal').classList.add('hidden');
-        };
+        });
         
-        downloadMarker.onclick = function() {
+        downloadMarker.addEventListener('click', function() {
             console.log("Download marker clicked");
             const hiroMarkerImg = document.getElementById('hiroMarker');
             
@@ -325,47 +292,23 @@
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-        };
+        });
         
-        markerButton.onclick = function() {
+        markerButton.addEventListener('click', function() {
             console.log("Marker button clicked");
             document.getElementById('markerModal').classList.remove('hidden');
-        };
+        });
         
-        infoButton.onclick = function() {
+        infoButton.addEventListener('click', function() {
             console.log("Info button clicked");
             window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
-        };
-        
-        // Set up marker tracking
-        const marker = document.getElementById('mainMarker');
-        marker.addEventListener('markerFound', function() {
-            document.getElementById('statusMessage').textContent = "¡Marcador detectado! Toca el modelo para visitar Instagram";
         });
-        
-        marker.addEventListener('markerLost', function() {
-            document.getElementById('statusMessage').textContent = "Marcador perdido. Vuelve a mostrar el marcador HIRO";
+
+        // Enable touch interactions
+        const scene = document.querySelector('a-scene');
+        scene.addEventListener('loaded', function () {
+            console.log('Scene loaded');
         });
-        
-        // Create fixed model fallback
-        setTimeout(function() {
-            // If marker tracking doesn't work, create a fixed position entity
-            const modelContainer = document.getElementById('modelContainer');
-            
-            // Create a new entity at a fixed position in front of the camera
-            const fixedEntity = document.createElement('a-entity');
-            fixedEntity.setAttribute('id', 'fixedModel');
-            fixedEntity.setAttribute('gltf-model', 'stand-1.glb');
-            fixedEntity.setAttribute('position', '0 0 -3');
-            fixedEntity.setAttribute('scale', '0.5 0.5 0.5');
-            fixedEntity.setAttribute('rotation', '0 0 0');
-            fixedEntity.setAttribute('animation', 'property: rotation; to: 0 360 0; loop: true; dur: 30000; easing: linear');
-            fixedEntity.setAttribute('class', 'clickable');
-            fixedEntity.setAttribute('gesture-handler', '');
-            
-            // Add to scene
-            modelContainer.appendChild(fixedEntity);
-        }, 5000);
     };
 </script>
 </html>
