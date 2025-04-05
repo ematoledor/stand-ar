@@ -311,49 +311,39 @@
                     const directionXZ = new THREE.Vector2(cameraDirection.x, cameraDirection.z).normalize();
                     const targetXZ = cameraPositionXZ.clone().add(directionXZ.multiplyScalar(distanceFromCamera));
                     
-                    // Rotate model to face the camera
-                    const modelPosition = new THREE.Vector3(targetXZ.x, 0, targetXZ.y);
-                    const lookAtCamera = new THREE.Vector3().subVectors(
-                        new THREE.Vector3(cameraPosition.x, 0, cameraPosition.z), 
-                        modelPosition
-                    ).normalize();
-                    const angleY = Math.atan2(lookAtCamera.x, lookAtCamera.z);
-                    
                     // Hide UI elements
                     this.crosshair.style.display = 'none';
                     this.detectionRing.style.display = 'none';
                     this.tapIndicator.style.display = 'none';
                     this.footerText.style.display = 'block';
                     
-                    // Create an anchor entity at the target position
-                    const anchor = document.createElement('a-entity');
-                    anchor.setAttribute('id', 'model-anchor');
-                    anchor.setAttribute('position', {
+                    // Position the model directly - simpler approach
+                    this.standModel.setAttribute('position', {
                         x: targetXZ.x,
                         y: 0,
                         z: targetXZ.y
                     });
-                    document.querySelector('a-scene').appendChild(anchor);
                     
-                    // Make the model a child of the anchor and set its position relative to the anchor
-                    this.standModel.setAttribute('position', '0 0 0');
+                    // Rotate to face the camera
+                    const modelPosition = new THREE.Vector3(targetXZ.x, 0, targetXZ.y);
+                    const lookAtCamera = new THREE.Vector3().subVectors(
+                        new THREE.Vector3(cameraPosition.x, 0, cameraPosition.z), 
+                        modelPosition
+                    ).normalize();
+                    const angleY = Math.atan2(lookAtCamera.x, lookAtCamera.z);
                     this.standModel.setAttribute('rotation', {
                         x: 0,
                         y: THREE.MathUtils.radToDeg(angleY),
                         z: 0
                     });
-                    this.standModel.setAttribute('scale', '0.8 0.8 0.8');
-                    anchor.appendChild(this.standModel);
                     
-                    // Show the model with a simple scale animation
+                    // Set scale directly
+                    this.standModel.setAttribute('scale', '1 1 1');
+                    
+                    // Make the model visible
                     this.standModel.setAttribute('visible', true);
-                    this.standModel.setAttribute('animation__scale', {
-                        property: 'scale',
-                        from: '0.1 0.1 0.1',
-                        to: '0.8 0.8 0.8',
-                        dur: 1000,
-                        easing: 'easeOutElastic'
-                    });
+                    
+                    console.log('Model placed at:', targetXZ.x, 0, targetXZ.y);
                     
                     this.placedModel = true;
                     clearInterval(this.detectFloorInterval);
