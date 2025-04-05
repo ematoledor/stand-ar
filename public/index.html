@@ -89,6 +89,72 @@
             padding: 10px;
             display: none;
         }
+        .crosshair {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: 2px solid white;
+            display: none;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .crosshair::before, .crosshair::after {
+            content: '';
+            position: absolute;
+            background-color: white;
+        }
+        .crosshair::before {
+            width: 2px;
+            height: 20px;
+            top: 10px;
+            left: 19px;
+        }
+        .crosshair::after {
+            width: 20px;
+            height: 2px;
+            top: 19px;
+            left: 10px;
+        }
+        .detection-ring {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            border: 3px solid #4CAF50;
+            display: none;
+            z-index: 10;
+            pointer-events: none;
+            opacity: 0.7;
+            box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+        }
+        .pulsate {
+            animation: pulsate 1s ease-out infinite;
+        }
+        @keyframes pulsate {
+            0% {
+                transform: translate(-50%, -50%) scale(0.8);
+                opacity: 0.3;
+            }
+            50% {
+                transform: translate(-50%, -50%) scale(1);
+                opacity: 0.7;
+            }
+            100% {
+                transform: translate(-50%, -50%) scale(0.8);
+                opacity: 0.3;
+            }
+        }
+        .floor-detected {
+            background-color: rgba(76, 175, 80, 0.3);
+            border-color: #4CAF50;
+        }
     </style>
 </head>
 <body>
@@ -100,9 +166,13 @@
         <button id="startAR" class="button start-button">Start AR</button>
     </div>
 
+    <!-- Floor detection UI -->
+    <div id="crosshair" class="crosshair"></div>
+    <div id="detectionRing" class="detection-ring"></div>
+
     <!-- AR Scene -->
     <div id="loadingMessage" class="centered">Loading AR Experience...</div>
-    <div id="tapIndicator" class="tap-indicator">Tap on the screen to place the model</div>
+    <div id="tapIndicator" class="tap-indicator">Point at the floor and tap to place the model</div>
     <div id="errorMessage" class="centered">Camera error - Please allow camera access and reload the page</div>
     <div class="footer-text">Tap on the model to visit Instagram</div>
     
@@ -111,11 +181,26 @@
         arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best;"
         vr-mode-ui="enabled: false"
         renderer="logarithmicDepthBuffer: true; precision: medium;"
+        raycaster="objects: .collidable; far: 100"
+        cursor="rayOrigin: mouse"
         id="scene">
         
         <a-assets>
             <a-asset-item id="stand-model" src="stand-1.glb"></a-asset-item>
         </a-assets>
+
+        <!-- Floor plane to detect hits (invisible) -->
+        <a-plane 
+            id="floor-plane" 
+            class="collidable"
+            position="0 0 0" 
+            rotation="-90 0 0" 
+            width="100" 
+            height="100" 
+            color="#888"
+            opacity="0.0"
+            visible="false">
+        </a-plane>
 
         <a-entity
             id="stand"
@@ -128,42 +213,120 @@
             visible="false">
         </a-entity>
 
-        <a-entity camera look-controls position="0 1.6 0"></a-entity>
+        <a-entity camera look-controls position="0 1.6 0" raycaster></a-entity>
     </a-scene>
 
     <script>
-        // AR placement component
-        AFRAME.registerComponent('tap-place', {
+        // Floor detection component
+        AFRAME.registerComponent('floor-detector', {
             init: function() {
-                this.el.addEventListener('click', this.onTap.bind(this));
+                this.raycaster = new THREE.Raycaster();
+                this.mouse = new THREE.Vector2();
+                this.isFloorDetected = false;
                 this.placedModel = false;
+                
+                this.camera = document.querySelector('a-entity[camera]');
+                this.floor = document.querySelector('#floor-plane');
+                this.standModel = document.getElementById('stand');
+                this.crosshair = document.getElementById('crosshair');
+                this.detectionRing = document.getElementById('detectionRing');
                 this.tapIndicator = document.getElementById('tapIndicator');
                 this.footerText = document.querySelector('.footer-text');
-                this.standModel = document.getElementById('stand');
                 
-                // Show tap indicator
-                this.tapIndicator.style.display = 'block';
+                // Show crosshair
+                this.crosshair.style.display = 'block';
+                this.detectionRing.style.display = 'block';
+                this.detectionRing.classList.add('pulsate');
+                
+                // Listen for raycaster-intersection events
+                this.el.addEventListener('click', this.handleTap.bind(this));
+                
+                // Set up continuous floor detection
+                this.detectFloorInterval = setInterval(this.detectFloor.bind(this), 100);
             },
-            onTap: function(event) {
-                if (this.placedModel) return;
+            
+            detectFloor: function() {
+                if (this.placedModel) {
+                    clearInterval(this.detectFloorInterval);
+                    return;
+                }
                 
-                // Get the camera position
-                const camera = document.querySelector('a-entity[camera]');
+                // Get camera direction
+                const cameraPosition = this.camera.object3D.position;
+                const cameraDirection = new THREE.Vector3(0, 0, -1);
+                cameraDirection.applyQuaternion(this.camera.object3D.quaternion);
                 
-                // Position the model 2 meters in front of the camera on the ground
-                this.standModel.setAttribute('position', {
-                    x: 0,
-                    y: 0, // On the ground
-                    z: -2    // 2 meters away from the user
-                });
-                this.standModel.setAttribute('visible', true);
+                // Set up raycaster
+                this.raycaster.set(cameraPosition, cameraDirection);
                 
-                // Hide tap indicator and show footer text
-                this.tapIndicator.style.display = 'none';
-                this.footerText.style.display = 'block';
+                // Check for intersections with the floor plane
+                const floorObject = this.floor.object3D;
+                const intersects = this.raycaster.intersectObject(floorObject, true);
                 
-                // Set placed flag
-                this.placedModel = true;
+                if (intersects.length > 0) {
+                    // Floor detected
+                    if (!this.isFloorDetected) {
+                        this.detectionRing.classList.add('floor-detected');
+                        this.isFloorDetected = true;
+                        this.tapIndicator.textContent = 'Floor detected! Tap to place model';
+                    }
+                } else {
+                    // Floor not detected
+                    if (this.isFloorDetected) {
+                        this.detectionRing.classList.remove('floor-detected');
+                        this.isFloorDetected = false;
+                        this.tapIndicator.textContent = 'Point at the floor and tap to place the model';
+                    }
+                }
+            },
+            
+            handleTap: function(event) {
+                if (this.placedModel || !this.isFloorDetected) return;
+                
+                // Get camera direction
+                const cameraPosition = this.camera.object3D.position;
+                const cameraDirection = new THREE.Vector3(0, 0, -1);
+                cameraDirection.applyQuaternion(this.camera.object3D.quaternion);
+                
+                // Set up raycaster
+                this.raycaster.set(cameraPosition, cameraDirection);
+                
+                // Check for intersections with the floor plane
+                const floorObject = this.floor.object3D;
+                const intersects = this.raycaster.intersectObject(floorObject, true);
+                
+                if (intersects.length > 0) {
+                    // Place model at intersection point
+                    const intersection = intersects[0].point;
+                    
+                    // Position the model at the intersection point
+                    this.standModel.setAttribute('position', {
+                        x: intersection.x,
+                        y: 0, // Ensure it's on the ground
+                        z: intersection.z
+                    });
+                    
+                    // Hide UI elements
+                    this.crosshair.style.display = 'none';
+                    this.detectionRing.style.display = 'none';
+                    this.tapIndicator.style.display = 'none';
+                    this.footerText.style.display = 'block';
+                    
+                    // Show the model
+                    this.standModel.setAttribute('visible', true);
+                    
+                    // Play placement animation
+                    this.standModel.setAttribute('animation__place', {
+                        property: 'position.y',
+                        from: -0.5,
+                        to: 0,
+                        dur: 800,
+                        easing: 'easeOutElastic'
+                    });
+                    
+                    this.placedModel = true;
+                    clearInterval(this.detectFloorInterval);
+                }
             }
         });
 
@@ -177,9 +340,6 @@
             const startARButton = document.getElementById('startAR');
             const tapIndicator = document.getElementById('tapIndicator');
             const standModel = document.getElementById('stand');
-            
-            // Add tap-place component to scene
-            scene.setAttribute('tap-place', '');
             
             // Generate QR code
             const currentUrl = window.location.href;
@@ -208,6 +368,9 @@
                         setTimeout(function() {
                             loadingMessage.style.display = 'none';
                             tapIndicator.style.display = 'block';
+                            
+                            // Add floor detector component to scene
+                            scene.setAttribute('floor-detector', '');
                         }, 2000);
                     })
                     .catch(function(err) {
