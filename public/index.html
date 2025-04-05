@@ -322,12 +322,12 @@
 
         <!-- Anchor entity to attach model to -->
         <a-entity id="model-anchor" position="0 -100 0">
-            <a-entity
+        <a-entity
                 id="stand-model"
-                gltf-model="#stand-model"
+            gltf-model="#stand-model"
                 position="0 0 0"
-                scale="1 1 1"
-                rotation="0 0 0"
+            scale="1 1 1"
+            rotation="0 0 0"
                 visible="false"
                 class="clickable">
             </a-entity>
@@ -399,8 +399,9 @@
                         console.log('WebXR AR is supported, starting session');
                         arStatus.textContent = 'Iniciando WebXR...';
 
+                        // Use more flexible session options - make everything optional
                         const sessionInit = { 
-                            optionalFeatures: ['hit-test'] 
+                            optionalFeatures: ['hit-test', 'light-estimation'] 
                         };
 
                         // Request session
@@ -422,6 +423,16 @@
                                         setupARjs();
                                     }
                                 });
+                                
+                                // Enable surface placement even if hit testing isn't working well
+                                setTimeout(() => {
+                                    if (!isFloorDetected) {
+                                        console.log('No surfaces detected after timeout, enabling placement anyway');
+                                        isFloorDetected = true;
+                                        arStatus.textContent = 'WebXR activo - Toca para colocar';
+                                        placementIndicator.style.display = 'block';
+                                    }
+                                }, 5000);
                             })
                             .catch(error => {
                                 console.error('Failed to start WebXR session:', error);
@@ -448,29 +459,55 @@
                             baseLayer: xrLayer
                         });
                         
-                        // Request reference spaces
+                        console.log('WebXR layer set up successfully');
+                        
+                        // Request reference spaces - try multiple types for better compatibility
                         session.requestReferenceSpace('local-floor')
                             .then(refSpace => {
+                                console.log('Using local-floor reference space');
                                 xrRefSpace = refSpace;
                                 return session.requestReferenceSpace('viewer');
                             })
+                            .catch(error => {
+                                console.log('local-floor not supported, trying local', error);
+                                return session.requestReferenceSpace('local')
+                                    .then(refSpace => {
+                                        console.log('Using local reference space');
+                                        xrRefSpace = refSpace;
+                                        return session.requestReferenceSpace('viewer');
+                                    });
+                            })
                             .then(viewerSpace => {
+                                console.log('Viewer reference space created');
                                 xrViewerSpace = viewerSpace;
                                 
-                                // Set up hit testing
+                                // Try creating hit test source with expanded options
                                 return session.requestHitTestSource({
-                                    space: viewerSpace
+                                    space: viewerSpace,
+                                    entityTypes: ['plane', 'mesh'],  // Try to detect both planes and meshes
+                                    offsetRay: new XRRay()           // Default ray from viewer
                                 });
                             })
                             .then(hitTestSource => {
+                                console.log('Hit test source created successfully');
                                 xrHitTestSource = hitTestSource;
-                                console.log('Hit test source created');
                                 
                                 // Start the rendering loop
                                 session.requestAnimationFrame(onXRFrame);
                             })
                             .catch(error => {
-                                console.error('Error setting up WebXR:', error);
+                                console.error('Error setting up hit testing:', error);
+                                
+                                // Even without hit testing, try to continue with basic WebXR
+                                console.log('Continuing with WebXR without hit testing');
+                                
+                                // Make surfaces always detected for better UX
+                                isFloorDetected = true;
+                                arStatus.textContent = 'WebXR activo - Toca para colocar';
+                                placementIndicator.style.display = 'block';
+                                
+                                // Start rendering without hit testing
+                                session.requestAnimationFrame(onXRFrame);
                             });
                     })
                     .catch(error => {
@@ -488,42 +525,101 @@
                 // Queue next frame
                 session.requestAnimationFrame(onXRFrame);
                 
-                // Skip if no hit test source
-                if (!xrHitTestSource) return;
-                
-                // Get hit test results
-                const hitTestResults = frame.getHitTestResults(xrHitTestSource);
-                
-                if (hitTestResults.length > 0) {
-                    const hit = hitTestResults[0];
-                    const pose = hit.getPose(xrRefSpace);
+                try {
+                    // Get poses first to update the camera position
+                    const pose = frame.getViewerPose(xrRefSpace);
+                    if (!pose) {
+                        console.log('No pose');
+                        return;
+                    }
                     
-                    if (pose) {
-                        const position = pose.transform.position;
-                        lastHitPosition = position;
+                    // If no hit test source or hit test failed, try to use other methods
+                    if (!xrHitTestSource) {
+                        // No hit testing available - simulate a hit at a fixed distance
+                        isFloorDetected = true;
+                        arStatus.textContent = 'WebXR activo - Toca para colocar';
                         
-                        // Update UI to show floor detected
+                        // Position based on camera
+                        const views = pose.views;
+                        if (views.length > 0) {
+                            const view = views[0];
+                            
+                            // Create a point 2 meters in front of the camera
+                            const viewMatrix = new THREE.Matrix4().fromArray(view.transform.inverse.matrix);
+                            const cameraPosition = new THREE.Vector3().setFromMatrixPosition(viewMatrix);
+                            const direction = new THREE.Vector3(0, 0, -1).applyMatrix4(viewMatrix);
+                            direction.normalize();
+                            
+                            // Use this position for last hit
+                            lastHitPosition = {
+                                x: cameraPosition.x + direction.x * 2,
+                                y: 0, // Keep on floor level
+                                z: cameraPosition.z + direction.z * 2
+                            };
+                            
+                            // Add some visual feedback
+                            const screenCenter = {
+                                x: window.innerWidth / 2,
+                                y: window.innerHeight / 2
+                            };
+                            
+                            placementIndicator.style.display = 'block';
+                            placementIndicator.style.left = screenCenter.x + 'px';
+                            placementIndicator.style.top = screenCenter.y + 'px';
+                            
+                            addPlacementPoint(screenCenter.x, screenCenter.y);
+                        }
+                        return;
+                    }
+                    
+                    // Try to get hit test results
+                    const hitTestResults = frame.getHitTestResults(xrHitTestSource);
+                    
+                    if (hitTestResults.length > 0) {
+                        // Got a hit!
+                        const hit = hitTestResults[0];
+                        const hitPose = hit.getPose(xrRefSpace);
+                        
+                        if (hitPose) {
+                            console.log('Hit detected at', hitPose.transform.position);
+                            const position = hitPose.transform.position;
+                            lastHitPosition = {
+                                x: position.x,
+                                y: position.y,
+                                z: position.z
+                            };
+                            
+                            // Update UI to show floor detected
+                            if (!isFloorDetected) {
+                                isFloorDetected = true;
+                                arStatus.textContent = 'Superficie detectada - Toca para colocar';
+                            }
+                            
+                            // Project to screen and show indicator
+                            const coords = projectToScreen(position);
+                            if (coords) {
+                                placementIndicator.style.display = 'block';
+                                placementIndicator.style.left = coords.x + 'px';
+                                placementIndicator.style.top = coords.y + 'px';
+                                
+                                addPlacementPoint(coords.x, coords.y);
+                            }
+                        }
+                    } else {
+                        // No hit, but we'll keep the state as "detected" for better UX
+                        // Especially since many WebXR implementations have spotty hit testing
                         if (!isFloorDetected) {
                             isFloorDetected = true;
-                            arStatus.textContent = 'Superficie detectada - Toca para colocar';
+                            arStatus.textContent = 'Detección aproximada - Toca para colocar';
                         }
                         
-                        // Project to screen and show indicator
-                        const coords = projectToScreen(position);
-                        if (coords) {
-                            placementIndicator.style.display = 'block';
-                            placementIndicator.style.left = coords.x + 'px';
-                            placementIndicator.style.top = coords.y + 'px';
-                            
-                            addPlacementPoint(coords.x, coords.y);
-                        }
+                        // Keep the placement indicator in center of screen
+                        placementIndicator.style.display = 'block';
+                        placementIndicator.style.left = window.innerWidth / 2 + 'px';
+                        placementIndicator.style.top = window.innerHeight / 2 + 'px';
                     }
-                } else {
-                    if (isFloorDetected) {
-                        isFloorDetected = false;
-                        arStatus.textContent = 'Buscando superficies...';
-                        placementIndicator.style.display = 'none';
-                    }
+                } catch (error) {
+                    console.error('Error in XR frame:', error);
                 }
             }
             
@@ -578,11 +674,7 @@
             function placeModel(event) {
                 if (modelPlaced) return;
                 
-                // No placement if no surface detected in WebXR mode
-                if (usingWebXR && !isFloorDetected) {
-                    console.log('No surface detected');
-                    return;
-                }
+                console.log('Placing model', usingWebXR, isFloorDetected, lastHitPosition);
                 
                 let position;
                 
@@ -590,21 +682,23 @@
                     // Use WebXR hit position
                     position = {
                         x: lastHitPosition.x,
-                        y: lastHitPosition.y,
+                        y: lastHitPosition.y, 
                         z: lastHitPosition.z
                     };
+                    console.log('Using hit position', position);
                 } else {
-                    // Use camera-relative position for AR.js
+                    // Use camera-relative position as fallback
                     const camera = document.querySelector('[camera]').object3D;
                     const direction = new THREE.Vector3(0, 0, -1);
                     direction.applyQuaternion(camera.quaternion);
-                    direction.multiplyScalar(5);
+                    direction.multiplyScalar(2); // Place 2 meters away
                     
                     position = {
                         x: camera.position.x + direction.x,
-                        y: 0,
+                        y: 0, // Keep on floor
                         z: camera.position.z + direction.z
                     };
+                    console.log('Using fallback position', position);
                 }
                 
                 // Position the model
@@ -625,7 +719,7 @@
                     z: 0
                 });
                 
-                // Create WebXR anchor if available
+                // Try to create a WebXR anchor if available
                 if (usingWebXR && xrSession && 'createAnchor' in xrSession) {
                     try {
                         const hitPose = new XRRigidTransform(
@@ -702,8 +796,8 @@
                 startWebXR();
                 
                 // Hide loading message after a delay
-                setTimeout(function() {
-                    loadingMessage.style.display = 'none';
+                        setTimeout(function() {
+                            loadingMessage.style.display = 'none';
                 }, 3000);
             }
             
