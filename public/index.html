@@ -188,11 +188,12 @@
     
     <a-scene 
         embedded
-        arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
+        arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best; detectionMode: mono_and_matrix; matrixCodeType: 3x3; maxDetectionRate: 30; canvasWidth: 1280; canvasHeight: 960;"
         vr-mode-ui="enabled: false"
-        renderer="logarithmicDepthBuffer: true; precision: medium;"
+        renderer="logarithmicDepthBuffer: true; precision: medium; antialias: true;"
         raycaster="objects: .collidable; far: 100"
         cursor="rayOrigin: mouse"
+        ar-hit-test
         id="scene">
         
         <a-assets>
@@ -207,8 +208,7 @@
             rotation="-90 0 0" 
             width="100" 
             height="100" 
-            color="#888"
-            opacity="0.0"
+            material="shader: flat; side: double; transparent: true; opacity: 0.0"
             visible="false">
         </a-plane>
 
@@ -219,7 +219,6 @@
             scale="1 1 1"
             rotation="0 0 0"
             class="clickable"
-            gesture-handler
             visible="false">
         </a-entity>
 
@@ -227,8 +226,61 @@
     </a-scene>
 
     <script>
-        // Add debugging to see what's happening
-        console.log("Script loaded");
+        // AR Hit-Testing component to improve floor anchoring
+        AFRAME.registerComponent('ar-hit-test', {
+            init: function() {
+                this.xrHitTestSource = null;
+                this.viewerSpace = null;
+                this.refSpace = null;
+
+                this.el.sceneEl.renderer.xr.addEventListener('sessionend', (ev) => {
+                    this.xrHitTestSource = null;
+                });
+
+                this.el.sceneEl.renderer.xr.addEventListener('sessionstart', (ev) => {
+                    let session = this.el.sceneEl.renderer.xr.getSession();
+                    
+                    let refSpaceType = 'local-floor';
+                    session.requestReferenceSpace(refSpaceType)
+                        .then((refSpace) => {
+                            this.refSpace = refSpace;
+                            return session.requestReferenceSpace('viewer');
+                        })
+                        .then((viewerSpace) => {
+                            this.viewerSpace = viewerSpace;
+                            return session.requestHitTestSource({space: this.viewerSpace});
+                        })
+                        .then((hitTestSource) => {
+                            this.xrHitTestSource = hitTestSource;
+                        });
+                });
+            },
+            
+            tick: function() {
+                if (this.el.sceneEl.is('ar-mode') && this.xrHitTestSource && this.viewerSpace && this.refSpace) {
+                    let frame = this.el.sceneEl.frame;
+                    let xrViewerPose = frame.getViewerPose(this.refSpace);
+                    
+                    if (xrViewerPose) {
+                        let hitTestResults = frame.getHitTestResults(this.xrHitTestSource);
+                        
+                        if (hitTestResults.length > 0) {
+                            let pose = hitTestResults[0].getPose(this.refSpace);
+                            
+                            // Update the floor plane position to match the hit test
+                            let floorPlane = document.getElementById('floor-plane');
+                            if (floorPlane) {
+                                floorPlane.setAttribute('position', {
+                                    x: pose.transform.position.x,
+                                    y: pose.transform.position.y,
+                                    z: pose.transform.position.z
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        });
 
         // Floor detection component
         AFRAME.registerComponent('floor-detector', {
@@ -309,11 +361,8 @@
                 const intersects = this.raycaster.intersectObject(floorObject, true);
                 
                 if (intersects.length > 0) {
-                    // Calculate position 2 meters in front of the camera on the floor
-                    const distanceFromCamera = 2; // Reduced distance to keep model closer
-                    const cameraPositionXZ = new THREE.Vector2(cameraPosition.x, cameraPosition.z);
-                    const directionXZ = new THREE.Vector2(cameraDirection.x, cameraDirection.z).normalize();
-                    const targetXZ = cameraPositionXZ.clone().add(directionXZ.multiplyScalar(distanceFromCamera));
+                    // Use the exact hit point instead of calculating a fixed distance
+                    const hitPoint = intersects[0].point;
                     
                     // Hide UI elements
                     this.crosshair.style.display = 'none';
@@ -321,22 +370,17 @@
                     this.tapIndicator.style.display = 'none';
                     this.footerText.style.display = 'block';
                     
-                    // Create a real-world anchor
-                    const scene = document.querySelector('a-scene');
-                    scene.setAttribute('ar-hit-test', '');
-                    
-                    // Set model properties
+                    // Position the model at the exact hit point
                     this.standModel.setAttribute('position', {
-                        x: targetXZ.x,
-                        y: 0, // Ensure it's at floor level
-                        z: targetXZ.y
+                        x: hitPoint.x,
+                        y: 0,  // Keep y at 0 to stay on floor
+                        z: hitPoint.z
                     });
                     
-                    // Make it face the user
-                    const modelPosition = new THREE.Vector3(targetXZ.x, 0, targetXZ.y);
+                    // Rotate to face the camera
                     const lookAtCamera = new THREE.Vector3().subVectors(
                         new THREE.Vector3(cameraPosition.x, 0, cameraPosition.z), 
-                        modelPosition
+                        new THREE.Vector3(hitPoint.x, 0, hitPoint.z)
                     ).normalize();
                     const angleY = Math.atan2(lookAtCamera.x, lookAtCamera.z);
                     this.standModel.setAttribute('rotation', {
@@ -345,16 +389,13 @@
                         z: 0
                     });
                     
-                    // Set appropriate scale
-                    this.standModel.setAttribute('scale', '0.8 0.8 0.8');
+                    // Set scale directly
+                    this.standModel.setAttribute('scale', '1 1 1');
                     
-                    // Make model visible
+                    // Make the model visible
                     this.standModel.setAttribute('visible', true);
                     
-                    // Add environment-specific anchoring to stabilize the model
-                    this.standModel.setAttribute('ar-mode', 'anchor');
-                    
-                    console.log('Model placed at:', targetXZ.x, 0, targetXZ.y);
+                    console.log('Model placed at exact hit point:', hitPoint.x, 0, hitPoint.z);
                     
                     this.placedModel = true;
                     clearInterval(this.detectFloorInterval);
@@ -362,49 +403,8 @@
             }
         });
 
-        // Add gesture handler component to allow model manipulation
-        AFRAME.registerComponent('gesture-handler', {
-            schema: {
-                enabled: {default: true},
-            },
-            
-            init: function() {
-                this.isVisible = false;
-                this.el.sceneEl.addEventListener('click', this.onClick.bind(this));
-            },
-            
-            onClick: function(evt) {
-                if (!this.isVisible || !this.data.enabled) return;
-                
-                // Handle click to open Instagram
-                if (this.el.getAttribute('visible')) {
-                    window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
-                }
-            },
-            
-            update: function() {
-                this.isVisible = this.el.getAttribute('visible');
-            }
-        });
-        
-        // Add AR hit test component to better anchor objects
-        AFRAME.registerComponent('ar-hit-test', {
-            init: function() {
-                // Only initialize if WebXR hit-test is available
-                if (navigator.xr) {
-                    navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
-                        if (supported) {
-                            console.log('WebXR AR hit-test supported');
-                        }
-                    });
-                }
-            }
-        });
-
         // Main app initialization
         document.addEventListener('DOMContentLoaded', function() {
-            console.log("DOM loaded, initializing AR experience");
-            
             // Get UI elements
             const startScreen = document.getElementById('startScreen');
             const scene = document.getElementById('scene');
@@ -415,58 +415,35 @@
             const standModel = document.getElementById('stand');
             
             // Start AR button
-            if (startARButton) {
-                console.log("Start AR button found, adding click listener");
-                startARButton.addEventListener('click', startARExperience);
-            } else {
-                console.error("Start AR button not found!");
-            }
-            
-            function startARExperience() {
-                console.log("Starting AR experience");
+            startARButton.addEventListener('click', function() {
                 startScreen.classList.add('hidden');
                 loadingMessage.style.display = 'block';
                 
                 // Request camera permissions
-                navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+                navigator.mediaDevices.getUserMedia({ video: true })
                     .then(function(stream) {
-                        console.log("Camera access granted");
                         // Camera access granted
                         stream.getTracks().forEach(track => track.stop());
-                        
-                        // Initialize AR scene after a delay
+                        // Show tap indicator after a delay to allow AR to initialize
                         setTimeout(function() {
                             loadingMessage.style.display = 'none';
                             tapIndicator.style.display = 'block';
                             
                             // Add floor detector component to scene
                             scene.setAttribute('floor-detector', '');
-                            console.log("Floor detector added to scene");
-                        }, 1500);
+                            
+                            // Ensure our AR hit test is running
+                            if (!scene.hasAttribute('ar-hit-test')) {
+                                scene.setAttribute('ar-hit-test', '');
+                            }
+                        }, 2000);
                     })
                     .catch(function(err) {
                         // Camera access denied
-                        console.error("Camera error:", err);
                         errorMessage.style.display = 'block';
                         loadingMessage.style.display = 'none';
+                        console.error("Camera error:", err);
                     });
-            }
-            
-            // AR.js initialization events
-            scene.addEventListener('loaded', function() {
-                console.log("A-Frame scene loaded");
-            });
-            
-            scene.addEventListener('renderstart', function() {
-                console.log("A-Frame rendering started");
-            });
-            
-            window.addEventListener('camera-init', function() {
-                console.log("AR.js camera initialized");
-            });
-            
-            window.addEventListener('arjs-video-loaded', function() {
-                console.log("AR.js video loaded");
             });
             
             // When assets are loaded
@@ -476,15 +453,13 @@
             
             // Set up click event to open Instagram when model is clicked
             standModel.addEventListener('click', function() {
-                console.log("Model clicked");
-                if (standModel.getAttribute('visible')) {
+                if (standModel.getAttribute('visible') === true) {
                     window.open('https://www.instagram.com/coparmex_cdmx', '_blank');
                 }
             });
 
             // Handle camera permissions error
-            window.addEventListener('camera-error', function(error) {
-                console.error("AR.js camera error:", error);
+            window.addEventListener('camera-error', function() {
                 errorMessage.style.display = 'block';
                 loadingMessage.style.display = 'none';
             });
